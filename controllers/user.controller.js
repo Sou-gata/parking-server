@@ -1,12 +1,25 @@
 const { prisma } = require("../utils/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const axios = require("axios");
+const { OAuth2Client } = require("google-auth-library");
 const { ApiError } = require("../utils/ApiError");
 const { ApiResponse } = require("../utils/ApiResponse");
 const {
     saveBase64File,
     cleanupUploadedFiles,
 } = require("../utils/helperFunctions");
+const { consumeVerificationToken } = require("./otp.controller");
+const { sendPushNotificationToDevices } = require("../utils/notifications");
+const loginAttemptTracker = require("../utils/loginAttemptTracker");
+
+const googleClient = new OAuth2Client(
+    process.env.GOOGLE_CLIENT_ID ||
+        "196392862520-nq7una9ib2t866dtf7tgmtr3rkcd6jr7.apps.googleusercontent.com"
+);
 
 /**
  * Register a new user (Customer)
@@ -21,45 +34,83 @@ const registerUser = async (req, res) => {
             email,
             phone_number,
             password,
-            user_address,
-            address,
-            landmark,
-            latitude,
-            longitude,
-            profile_photo, // Base64 string from app
+            profile_photo, // Base64 string or remote URL from app
+            profile_photo_url,
+            otp_verification_token,
         } = req.body;
 
         const resolvedFullName = full_name || name;
-        const resolvedAddress = user_address || address;
 
         // 1. Validation - check for required fields
         if (
-            [resolvedFullName, username, email, password].some(
-                (field) => !field || field.trim() === ""
+            [resolvedFullName, username, email, phone_number, password].some(
+                (field) => !field || String(field).trim() === ""
             )
         ) {
-            throw new ApiError(400, "All required fields must be provided");
+            throw new ApiError(
+                400,
+                "All required fields (including Phone Number) must be provided"
+            );
         }
 
-        // FormData / Multer File Upload Process
+        // 2. FormData / Multer File Upload Process
         let profilePhotoPath = null;
         if (req.file?.path) {
             profilePhotoPath = req.file.path
                 .replace(/\\/g, "/")
                 .replace(/^uploads\//, "");
-        } else if (profile_photo) {
+        } else if (profile_photo && !profile_photo.startsWith("http")) {
             const saved = saveBase64File(profile_photo, "profile", "profile");
             if (saved) {
                 savedFiles.push(saved);
                 profilePhotoPath = saved.replace(/^uploads\//, "");
+            }
+        } else if (
+            profile_photo_url ||
+            (profile_photo && profile_photo.startsWith("http"))
+        ) {
+            const imgUrl = profile_photo_url || profile_photo;
+            try {
+                const ext = "jpg";
+                const filename = `profile_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.${ext}`;
+                const uploadDir = path.join(
+                    __dirname,
+                    "..",
+                    "uploads",
+                    "profile"
+                );
+                if (!fs.existsSync(uploadDir)) {
+                    fs.mkdirSync(uploadDir, { recursive: true });
+                }
+                const filePath = path.join(uploadDir, filename);
+                const imageRes = await axios.get(imgUrl, {
+                    responseType: "arraybuffer",
+                    timeout: 10000,
+                });
+                fs.writeFileSync(filePath, Buffer.from(imageRes.data));
+                profilePhotoPath = `profile/${filename}`;
+                savedFiles.push(`uploads/profile/${filename}`);
+            } catch (e) {
+                console.error(
+                    "Failed to download Google profile image:",
+                    e.message
+                );
+                profilePhotoPath = imgUrl;
             }
         }
 
         // 3. Hash password
         const passwordHash = await bcrypt.hash(password, 10);
 
-        // 4. Run checking and insertion in an interactive transaction
+        // 4. Run checking, OTP verification, and insertion in an interactive transaction
         await prisma.$transaction(async (tx) => {
+            // Verify OTP Token before creating account
+            await consumeVerificationToken(
+                phone_number,
+                otp_verification_token,
+                tx
+            );
+
             // Check if user already exists
             const existingUser = await tx.user.findFirst({
                 where: {
@@ -82,16 +133,6 @@ const registerUser = async (req, res) => {
                     email,
                     phone_number: phone_number || null,
                     password_hash: passwordHash,
-                    user_address: resolvedAddress || null,
-                    landmark: landmark || null,
-                    latitude:
-                        latitude !== undefined && latitude !== null
-                            ? parseFloat(latitude)
-                            : null,
-                    longitude:
-                        longitude !== undefined && longitude !== null
-                            ? parseFloat(longitude)
-                            : null,
                     profile_photo_path: profilePhotoPath,
                     role: "user",
                     status: "active",
@@ -105,6 +146,8 @@ const registerUser = async (req, res) => {
                 data: {
                     user_id: createdUser.user_id,
                     amount: 100.0,
+                    previous_balance: 0.0,
+                    new_balance: 100.0,
                     type: "deposit",
                     status: "approved",
                     transaction_number: `WELCOME_BONUS_${createdUser.user_id}_${Math.floor(1000 + Math.random() * 9000)}`,
@@ -120,7 +163,9 @@ const registerUser = async (req, res) => {
         console.error("Error in registerUser:", error);
         cleanupUploadedFiles(req.file, savedFiles);
         if (error instanceof ApiError) {
-            return res.status(error.statusCode).json(error);
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
         }
         return res.status(500).json(new ApiError(500, error.message));
     }
@@ -140,7 +185,11 @@ const loginUser = async (req, res) => {
         // Check in standard users table first (handles customer, super_admin, agency_user)
         let user = await prisma.user.findFirst({
             where: {
-                OR: [{ username: username }, { email: username }],
+                OR: [
+                    { username: username },
+                    { email: username },
+                    { phone_number: username },
+                ],
             },
         });
         let role = null;
@@ -185,14 +234,45 @@ const loginUser = async (req, res) => {
             );
         }
 
+        const userIdentifier =
+            user.email || user.username || String(user.user_id);
+
+        // Check if account is locked due to 5 failed password attempts in 24 hours
+        const lockStatus = loginAttemptTracker.isLocked(userIdentifier);
+        if (lockStatus.locked) {
+            const hoursLeft = Math.max(
+                1,
+                Math.ceil(lockStatus.remainingMs / (1000 * 60 * 60))
+            );
+            throw new ApiError(
+                429,
+                `Account temporarily locked due to 5 failed login attempts. Please try again in ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}.`
+            );
+        }
+
         // Verify password
         const isPasswordValid = await bcrypt.compare(
             password,
             user.password_hash
         );
         if (!isPasswordValid) {
-            throw new ApiError(401, "Invalid credentials");
+            const attemptResult =
+                loginAttemptTracker.recordFailedAttempt(userIdentifier);
+            if (attemptResult.locked) {
+                throw new ApiError(
+                    429,
+                    "Too many failed login attempts. You have reached the limit of 5 wrong password attempts today. Your account has been locked for 24 hours."
+                );
+            }
+            const remaining = attemptResult.remainingAttempts;
+            throw new ApiError(
+                401,
+                `Invalid credentials. You have ${remaining} attempt${remaining === 1 ? "" : "s"} remaining today.`
+            );
         }
+
+        // Clear failed attempts counter on successful login
+        loginAttemptTracker.clearAttempts(userIdentifier);
 
         // Build user object for token & response
         const agencyId = isOrgUser ? user.org_id : user.agency_id || null;
@@ -207,6 +287,7 @@ const loginUser = async (req, res) => {
                 agencyId: agencyId,
                 agency_id: agencyId,
                 org_id: isOrgUser ? user.org_id : undefined,
+                is_test_data: Boolean(user.is_test_data),
             },
             process.env.JWT_SECRET || "your_secret_key",
             { expiresIn: "7d" }
@@ -241,7 +322,9 @@ const loginUser = async (req, res) => {
     } catch (error) {
         console.error("Error in loginUser:", error);
         if (error instanceof ApiError) {
-            return res.status(error.statusCode).json(error);
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
         }
         return res.status(500).json(new ApiError(500, error.message));
     }
@@ -322,17 +405,46 @@ const loginUserSuperAdmin = async (req, res) => {
             });
         }
 
+        const userIdentifier =
+            user.email || user.username || String(user.user_id);
+
+        // Check if account is locked due to 5 failed password attempts in 24 hours
+        const lockStatus = loginAttemptTracker.isLocked(userIdentifier);
+        if (lockStatus.locked) {
+            const hoursLeft = Math.max(
+                1,
+                Math.ceil(lockStatus.remainingMs / (1000 * 60 * 60))
+            );
+            return res.status(429).json({
+                success: false,
+                message: `Account temporarily locked due to 5 failed login attempts. Please try again in ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}.`,
+            });
+        }
+
         // Verify password
         const isPasswordValid = await bcrypt.compare(
             password,
             user.password_hash
         );
         if (!isPasswordValid) {
+            const attemptResult =
+                loginAttemptTracker.recordFailedAttempt(userIdentifier);
+            if (attemptResult.locked) {
+                return res.status(429).json({
+                    success: false,
+                    message:
+                        "Too many failed login attempts. You have reached the limit of 5 wrong password attempts today. Your account has been locked for 24 hours.",
+                });
+            }
+            const remaining = attemptResult.remainingAttempts;
             return res.status(401).json({
                 success: false,
-                message: "Invalid credentials",
+                message: `Invalid credentials. You have ${remaining} attempt${remaining === 1 ? "" : "s"} remaining today.`,
             });
         }
+
+        // Clear failed attempts counter on successful login
+        loginAttemptTracker.clearAttempts(userIdentifier);
 
         // Build user object
         const agencyId = isOrgUser ? user.org_id : user.agency_id || null;
@@ -346,6 +458,7 @@ const loginUserSuperAdmin = async (req, res) => {
                 email: user.email,
                 role: role,
                 agencyId: agencyId,
+                is_test_data: Boolean(user.is_test_data),
             },
             process.env.JWT_SECRET || "your_secret_key",
             { expiresIn: "7d" }
@@ -446,8 +559,11 @@ const getProfile = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in getProfile:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -537,26 +653,43 @@ const approveOrgRequest = async (req, res) => {
 const rejectOrgRequest = async (req, res) => {
     try {
         const { orgId } = req.params;
+        const { reason } = req.body;
         const parsedOrgId = parseInt(orgId);
         if (isNaN(parsedOrgId)) {
             throw new ApiError(400, "Invalid organization ID");
         }
+        if (!reason || !reason.trim()) {
+            throw new ApiError(400, "A reject reason is required");
+        }
+
+        const existing = await prisma.orgUser.findUnique({
+            where: { org_id: parsedOrgId },
+        });
+        if (!existing) throw new ApiError(404, "Organization not found");
+        if (existing.status !== "pending") {
+            throw new ApiError(
+                409,
+                `Cannot reject an organization with status "${existing.status}"`
+            );
+        }
+
         const org = await prisma.orgUser.update({
             where: { org_id: parsedOrgId },
-            data: { status: "rejected" },
+            data: { status: "rejected", reject_reason: reason.trim() },
         });
-        return res
-            .status(200)
-            .json(
-                new ApiResponse(
-                    200,
-                    null,
-                    `Organization '${org.org_name}' rejected`
-                )
-            );
+
+        const cleanOrg = { ...org, id: org.org_id, name: org.org_name };
+        delete cleanOrg.password_hash;
+
+        return new ApiResponse(
+            200,
+            cleanOrg,
+            `Organization '${org.org_name}' rejected`
+        ).send(res);
     } catch (error) {
         console.error("Error in rejectOrgRequest:", error);
-        return res.status(500).json(new ApiError(500, error.message));
+        if (error instanceof ApiError) return error.send(res);
+        return new ApiError(500, error.message).send(res);
     }
 };
 
@@ -622,8 +755,11 @@ const registerStaff = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in registerStaff:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -672,8 +808,11 @@ const listStaff = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in listStaff:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -777,8 +916,11 @@ const toggleStaffStatus = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in toggleStaffStatus:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -797,19 +939,363 @@ const updateProfile = async (req, res) => {
             landmark,
         } = req.body;
 
+        let finalVehicleNumbers = vehicle_numbers;
+
+        if (vehicle_numbers && typeof vehicle_numbers === "string") {
+            try {
+                let parsedVehicles = JSON.parse(vehicle_numbers);
+                if (Array.isArray(parsedVehicles)) {
+                    // Fetch existing user to preserve statuses of untouched vehicles
+                    let existingUser = await prisma.user.findUnique({
+                        where: { user_id: id },
+                    });
+                    let existingVehicles = [];
+                    if (existingUser && existingUser.vehicle_numbers) {
+                        try {
+                            if (existingUser.vehicle_numbers.startsWith("[")) {
+                                existingVehicles = JSON.parse(
+                                    existingUser.vehicle_numbers
+                                );
+                            }
+                        } catch (_) {}
+                    }
+
+                    const processedVehicles = [];
+                    for (let i = 0; i < parsedVehicles.length; i++) {
+                        const rawV = parsedVehicles[i];
+                        let vNumber =
+                            typeof rawV === "string"
+                                ? rawV.trim().toUpperCase()
+                                : (rawV.number || "").trim().toUpperCase();
+                        if (!vNumber) continue;
+
+                        const existing = existingVehicles.find(
+                            (ev) =>
+                                (typeof ev === "string" ? ev : ev.number)
+                                    .trim()
+                                    .toUpperCase() === vNumber
+                        );
+
+                        let docList = [];
+                        let hadNewDocs = false;
+
+                        // Process documents array (up to 3 documents)
+                        if (Array.isArray(rawV.documents)) {
+                            for (let d = 0; d < rawV.documents.length; d++) {
+                                const doc = rawV.documents[d];
+                                if (doc.base64) {
+                                    hadNewDocs = true;
+                                    const savedDoc = saveBase64File(
+                                        doc.base64,
+                                        "vehicle",
+                                        `vehicle_${id}_${Date.now()}_${d}`
+                                    );
+                                    if (savedDoc) {
+                                        docList.push({
+                                            name:
+                                                doc.name || `Document ${d + 1}`,
+                                            url: savedDoc.replace(
+                                                /^uploads\//,
+                                                ""
+                                            ),
+                                        });
+                                    }
+                                } else if (doc.url) {
+                                    docList.push({
+                                        name: doc.name || `Document ${d + 1}`,
+                                        url: doc.url,
+                                    });
+                                }
+                            }
+                        } else if (rawV.documentBase64) {
+                            hadNewDocs = true;
+                            const savedDoc = saveBase64File(
+                                rawV.documentBase64,
+                                "vehicle",
+                                `vehicle_${id}_${Date.now()}_0`
+                            );
+                            if (savedDoc) {
+                                docList.push({
+                                    name: rawV.documentName || "Document 1",
+                                    url: savedDoc.replace(/^uploads\//, ""),
+                                });
+                            }
+                        } else if (rawV.documentUrl) {
+                            docList.push({
+                                name: rawV.documentName || "Document 1",
+                                url: rawV.documentUrl,
+                            });
+                        }
+
+                        // Determine status
+                        let vStatus = "pending";
+                        let rejectionReason = null;
+                        let createdAt =
+                            rawV.created_at ||
+                            (existing && existing.created_at) ||
+                            new Date().toISOString();
+                        let approvedAt = null;
+
+                        if (existing && typeof existing === "object") {
+                            if (existing.status === "approved" && !hadNewDocs) {
+                                vStatus = "approved";
+                                rejectionReason = null;
+                                approvedAt =
+                                    existing.approved_at ||
+                                    existing.approvedAt ||
+                                    null;
+                                if (
+                                    docList.length === 0 &&
+                                    existing.documents
+                                ) {
+                                    docList = existing.documents;
+                                }
+                            } else if (
+                                existing.status === "rejected" &&
+                                !hadNewDocs
+                            ) {
+                                vStatus = "rejected";
+                                rejectionReason =
+                                    existing.rejection_reason || null;
+                                if (
+                                    docList.length === 0 &&
+                                    existing.documents
+                                ) {
+                                    docList = existing.documents;
+                                }
+                            } else {
+                                // New vehicle or re-submitted with new documents
+                                vStatus = "pending";
+                                rejectionReason = null;
+                            }
+                        } else if (existing && typeof existing === "string") {
+                            if (!hadNewDocs) {
+                                vStatus = "approved";
+                            }
+                        }
+
+                        processedVehicles.push({
+                            number: vNumber,
+                            status: vStatus,
+                            documents: docList,
+                            rejection_reason: rejectionReason,
+                            created_at: createdAt,
+                            approved_at: approvedAt,
+                        });
+                    }
+                    finalVehicleNumbers = JSON.stringify(processedVehicles);
+                }
+            } catch (e) {
+                console.error(
+                    "Error parsing vehicle_numbers for documents:",
+                    e
+                );
+            }
+        }
+
         let updatedData;
 
         if (role === "agency_admin") {
+            const {
+                org_name,
+                org_address,
+                latitude,
+                longitude,
+                profile_photo,
+                verification_document,
+                aadhaar_card,
+                trade_license_document,
+                two_wheeler_capacity,
+                three_wheeler_capacity,
+                car_capacity,
+                suv_capacity,
+                van_capacity,
+                pickup_capacity,
+                ev_capacity,
+                ev_charging_support,
+                two_wheeler_rate,
+                three_wheeler_rate,
+                car_rate,
+                suv_rate,
+                van_rate,
+                pickup_rate,
+                ev_rate,
+                cctv_available,
+                trade_license,
+                zoning_clearance,
+                shops_establishment_license,
+                gst_registration,
+                parking_length,
+                parking_width,
+                parking_height,
+                dimension_unit,
+            } = req.body;
+
+            const orgUpdateData = {};
+            if (org_name !== undefined) orgUpdateData.org_name = org_name;
+            if (phone_number !== undefined)
+                orgUpdateData.phone_number = phone_number;
+            if (org_address !== undefined || user_address !== undefined) {
+                orgUpdateData.org_address =
+                    org_address !== undefined ? org_address : user_address;
+            }
+            if (landmark !== undefined) orgUpdateData.landmark = landmark;
+            if (latitude !== undefined && latitude !== null)
+                orgUpdateData.latitude = parseFloat(latitude);
+            if (longitude !== undefined && longitude !== null)
+                orgUpdateData.longitude = parseFloat(longitude);
+
+            // Handle Base64 document / photo uploads
+            if (profile_photo) {
+                const saved = saveBase64File(
+                    profile_photo,
+                    "profile",
+                    `profile_${id}_${Date.now()}`
+                );
+                if (saved)
+                    orgUpdateData.profile_photo_path = saved.replace(
+                        /^uploads\//,
+                        ""
+                    );
+            }
+            if (verification_document) {
+                const saved = saveBase64File(
+                    verification_document,
+                    "documents",
+                    `doc_${id}_${Date.now()}`
+                );
+                if (saved)
+                    orgUpdateData.verification_document_path = saved.replace(
+                        /^uploads\//,
+                        ""
+                    );
+            }
+            if (aadhaar_card) {
+                const saved = saveBase64File(
+                    aadhaar_card,
+                    "documents",
+                    `aadhaar_${id}_${Date.now()}`
+                );
+                if (saved)
+                    orgUpdateData.aadhaar_card_path = saved.replace(
+                        /^uploads\//,
+                        ""
+                    );
+            }
+            if (trade_license_document) {
+                const saved = saveBase64File(
+                    trade_license_document,
+                    "documents",
+                    `trade_license_${id}_${Date.now()}`
+                );
+                if (saved)
+                    orgUpdateData.trade_license_document_path = saved.replace(
+                        /^uploads\//,
+                        ""
+                    );
+            }
+
+            // Capacities
+            if (two_wheeler_capacity !== undefined)
+                orgUpdateData.two_wheeler_capacity =
+                    parseInt(two_wheeler_capacity) || 0;
+            if (three_wheeler_capacity !== undefined)
+                orgUpdateData.three_wheeler_capacity =
+                    parseInt(three_wheeler_capacity) || 0;
+            if (car_capacity !== undefined)
+                orgUpdateData.car_capacity = parseInt(car_capacity) || 0;
+            if (suv_capacity !== undefined)
+                orgUpdateData.suv_capacity = parseInt(suv_capacity) || 0;
+            if (van_capacity !== undefined)
+                orgUpdateData.van_capacity = parseInt(van_capacity) || 0;
+            if (pickup_capacity !== undefined)
+                orgUpdateData.pickup_capacity = parseInt(pickup_capacity) || 0;
+            if (ev_capacity !== undefined)
+                orgUpdateData.ev_capacity = parseInt(ev_capacity) || 0;
+            if (ev_charging_support !== undefined) {
+                orgUpdateData.ev_charging_support =
+                    ev_charging_support === true ||
+                    ev_charging_support === "true" ||
+                    ev_charging_support === "yes";
+            }
+
+            // Rates
+            if (two_wheeler_rate !== undefined)
+                orgUpdateData.two_wheeler_rate =
+                    parseFloat(two_wheeler_rate) || 0;
+            if (three_wheeler_rate !== undefined)
+                orgUpdateData.three_wheeler_rate =
+                    parseFloat(three_wheeler_rate) || 0;
+            if (car_rate !== undefined)
+                orgUpdateData.car_rate = parseFloat(car_rate) || 0;
+            if (suv_rate !== undefined)
+                orgUpdateData.suv_rate = parseFloat(suv_rate) || 0;
+            if (van_rate !== undefined)
+                orgUpdateData.van_rate = parseFloat(van_rate) || 0;
+            if (pickup_rate !== undefined)
+                orgUpdateData.pickup_rate = parseFloat(pickup_rate) || 0;
+            if (ev_rate !== undefined)
+                orgUpdateData.ev_rate = parseFloat(ev_rate) || 0;
+
+            // Compliance
+            if (cctv_available !== undefined) {
+                orgUpdateData.cctv_available =
+                    cctv_available === true ||
+                    cctv_available === "true" ||
+                    cctv_available === "yes";
+            }
+            if (trade_license !== undefined) {
+                orgUpdateData.trade_license =
+                    trade_license === true ||
+                    trade_license === "true" ||
+                    trade_license === "yes";
+            }
+            if (zoning_clearance !== undefined) {
+                orgUpdateData.zoning_clearance =
+                    zoning_clearance === true ||
+                    zoning_clearance === "true" ||
+                    zoning_clearance === "yes";
+            }
+            if (shops_establishment_license !== undefined) {
+                orgUpdateData.shops_establishment_license =
+                    shops_establishment_license === true ||
+                    shops_establishment_license === "true" ||
+                    shops_establishment_license === "yes";
+            }
+            if (gst_registration !== undefined) {
+                orgUpdateData.gst_registration =
+                    gst_registration === true ||
+                    gst_registration === "true" ||
+                    gst_registration === "yes";
+            }
+
+            // Parking Dimensions
+            if (parking_length !== undefined) {
+                orgUpdateData.parking_length =
+                    parking_length !== "" && parking_length !== null
+                        ? parseFloat(parking_length)
+                        : null;
+            }
+            if (parking_width !== undefined) {
+                orgUpdateData.parking_width =
+                    parking_width !== "" && parking_width !== null
+                        ? parseFloat(parking_width)
+                        : null;
+            }
+            if (parking_height !== undefined) {
+                orgUpdateData.parking_height =
+                    parking_height !== "" && parking_height !== null
+                        ? parseFloat(parking_height)
+                        : null;
+            }
+            if (dimension_unit !== undefined) {
+                orgUpdateData.dimension_unit = dimension_unit || "meters";
+            }
+
             // Agency Admin / OrgUser profile update
             updatedData = await prisma.orgUser.update({
                 where: { org_id: id },
-                data: {
-                    phone_number:
-                        phone_number !== undefined ? phone_number : undefined,
-                    org_address:
-                        user_address !== undefined ? user_address : undefined,
-                    landmark: landmark !== undefined ? landmark : undefined,
-                },
+                data: orgUpdateData,
             });
             if (updatedData) {
                 updatedData = {
@@ -821,24 +1307,38 @@ const updateProfile = async (req, res) => {
                 };
             }
         } else {
+            const { profile_photo } = req.body;
+            const customerUpdateData = {
+                phone_number:
+                    phone_number !== undefined ? phone_number : undefined,
+                user_address:
+                    user_address !== undefined ? user_address : undefined,
+                landmark: landmark !== undefined ? landmark : undefined,
+                vehicle_numbers:
+                    finalVehicleNumbers !== undefined
+                        ? finalVehicleNumbers
+                        : undefined,
+                driving_licence:
+                    driving_licence !== undefined ? driving_licence : undefined,
+            };
+
+            if (profile_photo) {
+                const saved = saveBase64File(
+                    profile_photo,
+                    "profile",
+                    `profile_${id}_${Date.now()}`
+                );
+                if (saved)
+                    customerUpdateData.profile_photo_path = saved.replace(
+                        /^uploads\//,
+                        ""
+                    );
+            }
+
             // Customer or other user profile update
             updatedData = await prisma.user.update({
                 where: { user_id: id },
-                data: {
-                    phone_number:
-                        phone_number !== undefined ? phone_number : undefined,
-                    user_address:
-                        user_address !== undefined ? user_address : undefined,
-                    landmark: landmark !== undefined ? landmark : undefined,
-                    vehicle_numbers:
-                        vehicle_numbers !== undefined
-                            ? vehicle_numbers
-                            : undefined,
-                    driving_licence:
-                        driving_licence !== undefined
-                            ? driving_licence
-                            : undefined,
-                },
+                data: customerUpdateData,
             });
             if (updatedData) {
                 updatedData = {
@@ -848,6 +1348,7 @@ const updateProfile = async (req, res) => {
                     agencyId: updatedData.agency_id,
                 };
                 if (updatedData.role === "user") {
+                    userData = updatedData;
                     updatedData.walletBalance = updatedData.wallet_balance
                         ? parseFloat(updatedData.wallet_balance)
                         : 0.0;
@@ -872,261 +1373,33 @@ const updateProfile = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in updateProfile:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
-        return res.status(500).json(new ApiError(500, error.message));
-    }
-};
-
-/**
- * Get dashboard statistics according to user role
- */
-const getDashboardStats = async (req, res) => {
-    try {
-        const { id, role, agency_id, org_id } = req.user;
-        const userRole = role || "user";
-
-        let stats = { role: userRole };
-
-        if (userRole === "user") {
-            // Customer stats
-            const user = await prisma.user.findUnique({
-                where: { user_id: id },
-                select: { wallet_balance: true, full_name: true },
-            });
-
-            const bookings = await prisma.booking.findMany({
-                where: { user_id: id },
-                orderBy: { created_at: "desc" },
-                take: 5,
-            });
-
-            const totalBookingsCount = await prisma.booking.count({
-                where: { user_id: id },
-            });
-
-            const activeBookingsCount = await prisma.booking.count({
-                where: {
-                    user_id: id,
-                    status: { in: ["booked", "checked_in"] },
-                },
-            });
-
-            const completedBookingsCount = await prisma.booking.count({
-                where: {
-                    user_id: id,
-                    status: "completed",
-                },
-            });
-
-            const activeBooking = await prisma.booking.findFirst({
-                where: {
-                    user_id: id,
-                    status: { in: ["booked", "checked_in"] },
-                },
-                orderBy: { created_at: "desc" },
-            });
-
-            const totalSpentAggregate = await prisma.booking.aggregate({
-                where: { user_id: id, payment_status: "paid" },
-                _sum: { total_bill: true },
-            });
-
-            stats = {
-                role: "user",
-                walletBalance: user?.wallet_balance
-                    ? Math.max(0, parseFloat(user.wallet_balance))
-                    : 0,
-                totalBookings: totalBookingsCount,
-                activeBookings: activeBookingsCount,
-                completedBookings: completedBookingsCount,
-                totalSpent: totalSpentAggregate._sum.total_bill
-                    ? Math.max(
-                          0,
-                          parseFloat(totalSpentAggregate._sum.total_bill)
-                      )
-                    : 0,
-                activeBooking: activeBooking || null,
-                recentBookings: bookings,
-            };
-        } else if (userRole === "agency_admin" || userRole === "agency_user") {
-            // Agency Admin / Staff stats
-            const agencyIdToUse = agency_id || org_id || id;
-
-            const agency = await prisma.orgUser.findUnique({
-                where: { org_id: agencyIdToUse },
-            });
-
-            const activeBookingsCount = await prisma.booking.count({
-                where: {
-                    agency_id: agencyIdToUse,
-                    status: { in: ["booked", "checked_in"] },
-                },
-            });
-
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-
-            const todayBookingsCount = await prisma.booking.count({
-                where: {
-                    agency_id: agencyIdToUse,
-                    created_at: { gte: today },
-                },
-            });
-
-            const totalBookingsCount = await prisma.booking.count({
-                where: { agency_id: agencyIdToUse },
-            });
-
-            const staffCount = await prisma.user.count({
-                where: { agency_id: agencyIdToUse },
-            });
-
-            const recentBookings = await prisma.booking.findMany({
-                where: { agency_id: agencyIdToUse },
-                orderBy: { created_at: "desc" },
-                take: 5,
-            });
-
-            const pendingWithdrawalsCount =
-                await prisma.walletTransaction.count({
-                    where: {
-                        agency_id: agencyIdToUse,
-                        type: "agency_withdrawal",
-                        status: "pending",
-                    },
-                });
-
-            const forceCancelsCount = await prisma.booking.count({
-                where: {
-                    agency_id: agencyIdToUse,
-                    is_force_cancelled: true,
-                },
-            });
-
-            stats = {
-                role: userRole,
-                agencyName: agency?.org_name || "Parking Agency",
-                status: agency?.status || "active",
-                walletBalance: agency?.wallet_balance
-                    ? Math.max(0, parseFloat(agency.wallet_balance))
-                    : 0,
-                commissionPercentage: agency?.commission_percentage
-                    ? parseFloat(agency.commission_percentage)
-                    : 0,
-                twoWheelerCapacity: agency?.two_wheeler_capacity || 0,
-                carCapacity: agency?.car_capacity || 0,
-                suvCapacity: agency?.suv_capacity || 0,
-                evCapacity: agency?.ev_capacity || 0,
-                totalCapacity:
-                    (agency?.two_wheeler_capacity || 0) +
-                    (agency?.car_capacity || 0) +
-                    (agency?.suv_capacity || 0) +
-                    (agency?.ev_capacity || 0) +
-                    (agency?.three_wheeler_capacity || 0) +
-                    (agency?.van_capacity || 0) +
-                    (agency?.pickup_capacity || 0),
-                activeBookings: activeBookingsCount,
-                todayBookings: todayBookingsCount,
-                totalBookings: totalBookingsCount,
-                forceCancelsCount,
-                staffCount,
-                pendingWithdrawalsCount,
-                recentBookings,
-            };
-        } else if (userRole === "super_admin") {
-            // Super Admin stats
-            const totalUsers = await prisma.user.count({
-                where: { role: "user" },
-            });
-
-            const totalAgencies = await prisma.orgUser.count();
-
-            const pendingAgenciesCount = await prisma.orgUser.count({
-                where: { status: "pending" },
-            });
-
-            const pendingTopupsCount = await prisma.walletTransaction.count({
-                where: {
-                    status: "pending",
-                    type: { not: "agency_withdrawal" },
-                },
-            });
-
-            const pendingWithdrawalsCount =
-                await prisma.walletTransaction.count({
-                    where: { status: "pending", type: "agency_withdrawal" },
-                });
-
-            const pendingSettlementsCount =
-                await prisma.agencyTransaction.count({
-                    where: { status: "pending" },
-                });
-
-            const totalBookings = await prisma.booking.count();
-
-            const forceCancelsCount = await prisma.booking.count({
-                where: {
-                    is_force_cancelled: true,
-                },
-            });
-
-            const platformRevenueAggregate =
-                await prisma.agencyTransaction.aggregate({
-                    where: { status: "approved" },
-                    _sum: { admin_share: true, total_amount: true },
-                });
-
-            const recentAgencies = await prisma.orgUser.findMany({
-                orderBy: { created_at: "desc" },
-                take: 5,
-                select: {
-                    org_id: true,
-                    org_name: true,
-                    email: true,
-                    phone_number: true,
-                    status: true,
-                    created_at: true,
-                },
-            });
-
-            stats = {
-                role: "super_admin",
-                totalUsers,
-                totalAgencies,
-                pendingAgenciesCount,
-                pendingTopupsCount,
-                pendingWithdrawalsCount,
-                pendingSettlementsCount,
-                totalBookings,
-                forceCancelsCount,
-                totalAdminRevenue: platformRevenueAggregate._sum.admin_share
-                    ? parseFloat(platformRevenueAggregate._sum.admin_share)
-                    : 0,
-                totalVolume: platformRevenueAggregate._sum.total_amount
-                    ? parseFloat(platformRevenueAggregate._sum.total_amount)
-                    : 0,
-                recentAgencies,
-            };
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
         }
-
-        return res
-            .status(200)
-            .json(
-                new ApiResponse(
-                    200,
-                    stats,
-                    "Dashboard statistics retrieved successfully"
-                )
-            );
-    } catch (error) {
-        console.error("Error in getDashboardStats:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
 
+// const parseVehicleNumbers = (raw) => {
+//     if (!raw) return [];
+//     const trimmed = String(raw).trim();
+//     if (trimmed.startsWith("[")) {
+//         try {
+//             const parsed = JSON.parse(trimmed);
+//             if (Array.isArray(parsed)) {
+//                 return parsed.map((v) => String(v).trim()).filter(Boolean);
+//             }
+//         } catch {
+//             // fall through to comma-split below
+//         }
+//     }
+//     return trimmed
+//         .split(",")
+//         .map((v) => v.trim())
+//         .filter(Boolean);
+// };
 const parseVehicleNumbers = (raw) => {
     if (!raw) return [];
     const trimmed = String(raw).trim();
@@ -1134,7 +1407,13 @@ const parseVehicleNumbers = (raw) => {
         try {
             const parsed = JSON.parse(trimmed);
             if (Array.isArray(parsed)) {
-                return parsed.map((v) => String(v).trim()).filter(Boolean);
+                // return parsed.map((v) => String(v).trim()).filter(Boolean);
+
+                return parsed
+                    .map((v) => (typeof v === "string" ? v.trim() : v))
+                    .filter((v) =>
+                        typeof v === "string" ? v.length > 0 : v?.number
+                    );
             }
         } catch {
             // fall through to comma-split below
@@ -1146,20 +1425,127 @@ const parseVehicleNumbers = (raw) => {
         .filter(Boolean);
 };
 
+// const listAllUsersDirectory = async (req, res) => {
+//     try {
+//         const { status, search } = req.query;
+
+//         // Remove the "blocked" exclusion - fetch ALL users
+//         const customers = await prisma.user.findMany({
+//             where: {
+//                 role: "user",
+//                 // REMOVE THIS LINE: status: { not: "blocked" },
+//             },
+//             orderBy: { created_at: "desc" },
+//         });
+
+//         let normalizedUsers = customers.map((u) => ({
+//             id: u.user_id,
+//             name: u.full_name,
+//             username: u.username,
+//             email: u.email,
+//             phoneNumber: u.phone_number,
+//             status: u.status,
+//             walletBalance: u.wallet_balance ? parseFloat(u.wallet_balance) : 0,
+//             vehicleNumbers: parseVehicleNumbers(u.vehicle_numbers),
+//             drivingLicence: u.driving_licence || null,
+//             address: u.user_address || null,
+//             landmark: u.landmark || null,
+//             latitude: u.latitude ? parseFloat(u.latitude) : null,
+//             longitude: u.longitude ? parseFloat(u.longitude) : null,
+//             profilePhotoPath: u.profile_photo_path || null,
+//             createdAt: u.created_at,
+//         }));
+
+//         // Apply status filter if provided (including "blocked")
+//         if (status) {
+//             normalizedUsers = normalizedUsers.filter(
+//                 (u) => u.status === status
+//             );
+//         }
+
+//         // Apply search filter if provided
+//         if (search) {
+//             const term = search.toLowerCase();
+//             normalizedUsers = normalizedUsers.filter(
+//                 (u) =>
+//                     u.name?.toLowerCase().includes(term) ||
+//                     u.username?.toLowerCase().includes(term) ||
+//                     u.email?.toLowerCase().includes(term) ||
+//                     u.phoneNumber?.includes(term)
+//             );
+//         }
+
+//         const summary = {
+//             totalUsers: normalizedUsers.length,
+//             totalWalletBalance: normalizedUsers.reduce(
+//                 (sum, u) => sum + (u.walletBalance || 0),
+//                 0
+//             ),
+//         };
+
+//         return res
+//             .status(200)
+//             .json(
+//                 new ApiResponse(
+//                     200,
+//                     { users: normalizedUsers, summary },
+//                     "Customer directory fetched successfully"
+//                 )
+//             );
+//     } catch (error) {
+//         console.error("Error in listAllUsersDirectory:", error);
+//         return res.status(500).json(new ApiError(500, error.message));
+//     }
+// };
+
 const listAllUsersDirectory = async (req, res) => {
     try {
-        const { status, search } = req.query;
+        const { status, search, startDate, endDate, dataType } = req.query;
 
-        // Remove the "blocked" exclusion - fetch ALL users
+        // Build where clause
+        const whereClause = {
+            role: "user",
+        };
+
+        if (dataType === "test") {
+            whereClause.is_test_data = true;
+        } else if (dataType === "real") {
+            whereClause.is_test_data = false;
+        }
+
+        // Add date filtering
+        if (startDate || endDate) {
+            whereClause.created_at = {};
+            if (startDate) {
+                const start = new Date(startDate);
+                start.setHours(0, 0, 0, 0);
+                whereClause.created_at.gte = start;
+            }
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                whereClause.created_at.lte = end;
+            }
+        }
+
+        // Add search filtering
+        if (search && search.trim()) {
+            const searchTerm = search.trim();
+            whereClause.OR = [
+                { full_name: { contains: searchTerm } },
+                { username: { contains: searchTerm } },
+                { email: { contains: searchTerm } },
+                { phone_number: { contains: searchTerm } },
+            ];
+        }
+
         const customers = await prisma.user.findMany({
-            where: {
-                role: "user",
-                // REMOVE THIS LINE: status: { not: "blocked" },
-            },
+            where: whereClause,
             orderBy: { created_at: "desc" },
         });
 
-        let normalizedUsers = customers.map((u) => ({
+        // Format the response
+        const normalizedUsers = customers.map((u) => ({
             id: u.user_id,
             name: u.full_name,
             username: u.username,
@@ -1174,31 +1560,19 @@ const listAllUsersDirectory = async (req, res) => {
             latitude: u.latitude ? parseFloat(u.latitude) : null,
             longitude: u.longitude ? parseFloat(u.longitude) : null,
             profilePhotoPath: u.profile_photo_path || null,
+            isTestData: Boolean(u.is_test_data),
             createdAt: u.created_at,
         }));
 
-        // Apply status filter if provided (including "blocked")
+        // Apply additional status filter if provided (for cases where we want to filter after the DB query)
+        let filteredUsers = normalizedUsers;
         if (status) {
-            normalizedUsers = normalizedUsers.filter(
-                (u) => u.status === status
-            );
-        }
-
-        // Apply search filter if provided
-        if (search) {
-            const term = search.toLowerCase();
-            normalizedUsers = normalizedUsers.filter(
-                (u) =>
-                    u.name?.toLowerCase().includes(term) ||
-                    u.username?.toLowerCase().includes(term) ||
-                    u.email?.toLowerCase().includes(term) ||
-                    u.phoneNumber?.includes(term)
-            );
+            filteredUsers = normalizedUsers.filter((u) => u.status === status);
         }
 
         const summary = {
-            totalUsers: normalizedUsers.length,
-            totalWalletBalance: normalizedUsers.reduce(
+            totalUsers: filteredUsers.length,
+            totalWalletBalance: filteredUsers.reduce(
                 (sum, u) => sum + (u.walletBalance || 0),
                 0
             ),
@@ -1209,7 +1583,7 @@ const listAllUsersDirectory = async (req, res) => {
             .json(
                 new ApiResponse(
                     200,
-                    { users: normalizedUsers, summary },
+                    { users: filteredUsers, summary },
                     "Customer directory fetched successfully"
                 )
             );
@@ -1243,6 +1617,7 @@ const updateCustomerDetails = async (req, res) => {
             vehicle_numbers,
             status,
             status_reason,
+            is_test_data,
         } = req.body;
 
         const existing = await prisma.user.findUnique({
@@ -1282,12 +1657,16 @@ const updateCustomerDetails = async (req, res) => {
         if (full_name !== undefined) updateData.full_name = full_name;
         if (phone_number !== undefined)
             updateData.phone_number = phone_number || null;
-        if (user_address !== undefined)
-            updateData.user_address = user_address || null;
-        if (landmark !== undefined) updateData.landmark = landmark || null;
         if (driving_licence !== undefined)
             updateData.driving_licence = driving_licence || null;
         if (status !== undefined) updateData.status = status;
+
+        if (is_test_data !== undefined) {
+            updateData.is_test_data =
+                is_test_data === true ||
+                is_test_data === "true" ||
+                is_test_data === "test";
+        }
 
         // Vehicle numbers stored as a JSON-array string (matches how
         // parseVehicleNumbers reads it back on the directory list).
@@ -1344,6 +1723,7 @@ const updateCustomerDetails = async (req, res) => {
             latitude: updated.latitude ? parseFloat(updated.latitude) : null,
             longitude: updated.longitude ? parseFloat(updated.longitude) : null,
             profilePhotoPath: updated.profile_photo_path || null,
+            isTestData: Boolean(updated.is_test_data),
             createdAt: updated.created_at,
         };
 
@@ -1358,8 +1738,11 @@ const updateCustomerDetails = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in updateCustomerDetails:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1415,10 +1798,622 @@ const getUserStatusHistory = async (req, res) => {
     }
 };
 
+/**
+ * Super Admin: Get all pending vehicle registration requests
+ */
+const getPendingVehicleRequests = async (req, res) => {
+    try {
+        const users = await prisma.user.findMany({
+            where: {
+                vehicle_numbers: { not: null },
+            },
+            select: {
+                user_id: true,
+                full_name: true,
+                username: true,
+                email: true,
+                phone_number: true,
+                vehicle_numbers: true,
+                created_at: true,
+                updated_at: true,
+            },
+        });
+
+        const pendingList = [];
+        users.forEach((u) => {
+            if (!u.vehicle_numbers) return;
+            try {
+                let parsed = [];
+                if (u.vehicle_numbers.startsWith("[")) {
+                    parsed = JSON.parse(u.vehicle_numbers);
+                }
+                if (Array.isArray(parsed)) {
+                    parsed.forEach((v) => {
+                        if (typeof v === "object" && v.status === "pending") {
+                            pendingList.push({
+                                requestId: `${u.user_id}_${v.number}`,
+                                userId: u.user_id,
+                                userName: u.full_name,
+                                userUsername: u.username,
+                                userEmail: u.email,
+                                userPhone: u.phone_number,
+                                vehicleNumber: v.number,
+                                documents: Array.isArray(v.documents)
+                                    ? v.documents
+                                    : v.documentUrl
+                                      ? [
+                                            {
+                                                name:
+                                                    v.documentName ||
+                                                    "Document",
+                                                url: v.documentUrl,
+                                            },
+                                        ]
+                                      : [],
+                                status: v.status,
+                                createdAt: v.created_at || u.updated_at,
+                            });
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error("Error parsing user vehicle numbers:", err);
+            }
+        });
+
+        // Sort by createdAt descending
+        pendingList.sort(
+            (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+        );
+
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    pendingList,
+                    "Pending vehicle requests fetched successfully"
+                )
+            );
+    } catch (error) {
+        console.error("Error in getPendingVehicleRequests:", error);
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+
+/**
+ * Super Admin: Approve a vehicle number for a user
+ */
+const approveVehicleRequest = async (req, res) => {
+    try {
+        const { userId, vehicleNumber } = req.body;
+        const targetUserId = parseInt(userId || req.params.userId);
+        const targetVehicleNum = (
+            vehicleNumber ||
+            req.params.vehicleNumber ||
+            ""
+        )
+            .trim()
+            .toUpperCase();
+
+        if (!targetUserId || !targetVehicleNum) {
+            throw new ApiError(400, "User ID and vehicle number are required.");
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { user_id: targetUserId },
+        });
+
+        if (!user) {
+            throw new ApiError(404, "User not found.");
+        }
+
+        let parsedVehicles = [];
+        if (user.vehicle_numbers) {
+            try {
+                if (user.vehicle_numbers.startsWith("[")) {
+                    parsedVehicles = JSON.parse(user.vehicle_numbers);
+                }
+            } catch (_) {}
+        }
+
+        let vehicleFound = false;
+        parsedVehicles = parsedVehicles.map((v) => {
+            const vNum = typeof v === "string" ? v : v.number;
+            if (vNum && vNum.toUpperCase() === targetVehicleNum) {
+                vehicleFound = true;
+                if (typeof v === "string") {
+                    return {
+                        number: vNum,
+                        status: "approved",
+                        documents: [],
+                        approved_at: new Date().toISOString(),
+                    };
+                }
+                return {
+                    ...v,
+                    status: "approved",
+                    approved_at: new Date().toISOString(),
+                    rejection_reason: null,
+                };
+            }
+            return v;
+        });
+
+        if (!vehicleFound) {
+            throw new ApiError(
+                404,
+                `Vehicle number ${targetVehicleNum} not found for this user.`
+            );
+        }
+
+        await prisma.user.update({
+            where: { user_id: targetUserId },
+            data: {
+                vehicle_numbers: JSON.stringify(parsedVehicles),
+            },
+        });
+
+        // Send Firebase push notification to user's registered devices
+        try {
+            const devices = await prisma.userDevice.findMany({
+                where: { user_id: targetUserId },
+                select: { fcm_token: true },
+            });
+            if (devices && devices.length > 0) {
+                const tokens = devices.map((d) => d.fcm_token).filter(Boolean);
+                if (tokens.length > 0) {
+                    await sendPushNotificationToDevices(tokens, {
+                        title: "Vehicle Number Approved",
+                        message: `Your vehicle number ${targetVehicleNum} has been approved. You can now use it to book parking spots!`,
+                        data: {
+                            type: "vehicle_approval",
+                            vehicleNumber: targetVehicleNum,
+                            status: "approved",
+                        },
+                    });
+                }
+            }
+        } catch (fcmErr) {
+            console.error(
+                "Error sending Firebase vehicle approval push notification:",
+                fcmErr
+            );
+        }
+
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    { vehicleNumber: targetVehicleNum, status: "approved" },
+                    "Vehicle approved successfully"
+                )
+            );
+    } catch (error) {
+        console.error("Error in approveVehicleRequest:", error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+
+/**
+ * Super Admin: Reject a vehicle number with mandatory reason
+ */
+const rejectVehicleRequest = async (req, res) => {
+    try {
+        const { userId, vehicleNumber, rejection_reason } = req.body;
+        const targetUserId = parseInt(userId || req.params.userId);
+        const targetVehicleNum = (
+            vehicleNumber ||
+            req.params.vehicleNumber ||
+            ""
+        )
+            .trim()
+            .toUpperCase();
+        const reason = (rejection_reason || "").trim();
+
+        if (!targetUserId || !targetVehicleNum) {
+            throw new ApiError(400, "User ID and vehicle number are required.");
+        }
+        if (!reason) {
+            throw new ApiError(400, "A rejection reason is mandatory.");
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { user_id: targetUserId },
+        });
+
+        if (!user) {
+            throw new ApiError(404, "User not found.");
+        }
+
+        let parsedVehicles = [];
+        if (user.vehicle_numbers) {
+            try {
+                if (user.vehicle_numbers.startsWith("[")) {
+                    parsedVehicles = JSON.parse(user.vehicle_numbers);
+                }
+            } catch (_) {}
+        }
+
+        let vehicleFound = false;
+        parsedVehicles = parsedVehicles.map((v) => {
+            const vNum = typeof v === "string" ? v : v.number;
+            if (vNum && vNum.toUpperCase() === targetVehicleNum) {
+                vehicleFound = true;
+                if (typeof v === "string") {
+                    return {
+                        number: vNum,
+                        status: "rejected",
+                        documents: [],
+                        rejection_reason: reason,
+                        rejected_at: new Date().toISOString(),
+                    };
+                }
+                return {
+                    ...v,
+                    status: "rejected",
+                    rejection_reason: reason,
+                    rejected_at: new Date().toISOString(),
+                };
+            }
+            return v;
+        });
+
+        if (!vehicleFound) {
+            throw new ApiError(
+                404,
+                `Vehicle number ${targetVehicleNum} not found for this user.`
+            );
+        }
+
+        await prisma.user.update({
+            where: { user_id: targetUserId },
+            data: {
+                vehicle_numbers: JSON.stringify(parsedVehicles),
+            },
+        });
+
+        // Send Firebase push notification to user's registered devices
+        try {
+            const devices = await prisma.userDevice.findMany({
+                where: { user_id: targetUserId },
+                select: { fcm_token: true },
+            });
+            if (devices && devices.length > 0) {
+                const tokens = devices.map((d) => d.fcm_token).filter(Boolean);
+                if (tokens.length > 0) {
+                    await sendPushNotificationToDevices(tokens, {
+                        title: "Vehicle Registration Rejected",
+                        message: `Your vehicle number ${targetVehicleNum} was rejected. Reason: ${reason}`,
+                        data: {
+                            type: "vehicle_rejection",
+                            vehicleNumber: targetVehicleNum,
+                            status: "rejected",
+                            reason,
+                        },
+                    });
+                }
+            }
+        } catch (fcmErr) {
+            console.error(
+                "Error sending Firebase vehicle rejection push notification:",
+                fcmErr
+            );
+        }
+
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    vehicleNumber: targetVehicleNum,
+                    status: "rejected",
+                    rejection_reason: reason,
+                },
+                "Vehicle rejected successfully"
+            )
+        );
+    } catch (error) {
+        console.error("Error in rejectVehicleRequest:", error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+
+/**
+ * Handle Google Sign-in / Auth
+ * Verifies email or Google idToken
+ * If account exists -> returns JWT token & user data (logs in)
+ * If account does not exist -> returns exists: false with Google name, email, photoUrl
+ */
+const googleAuth = async (req, res) => {
+    try {
+        const {
+            idToken,
+            email: rawEmail,
+            name: rawName,
+            photo: rawPhoto,
+            photoUrl: rawPhotoUrl,
+        } = req.body;
+
+        let email = rawEmail ? String(rawEmail).trim().toLowerCase() : null;
+        let name = rawName ? String(rawName).trim() : null;
+        let photoUrl = rawPhoto || rawPhotoUrl || null;
+
+        // Verify ID token if provided
+        if (idToken) {
+            try {
+                const ticket = await googleClient.verifyIdToken({
+                    idToken: idToken,
+                    audience: [
+                        process.env.GOOGLE_CLIENT_ID,
+                        "196392862520-nq7una9ib2t866dtf7tgmtr3rkcd6jr7.apps.googleusercontent.com",
+                    ].filter(Boolean),
+                });
+                const payload = ticket.getPayload();
+                if (payload) {
+                    if (payload.email)
+                        email = payload.email.trim().toLowerCase();
+                    if (payload.name) name = payload.name;
+                    if (payload.picture) photoUrl = payload.picture;
+                }
+            } catch (tokenErr) {
+                console.warn("Google verifyIdToken note:", tokenErr.message);
+                // Fallback to body email if idToken verification has local audience mismatch
+            }
+        }
+
+        if (!email) {
+            throw new ApiError(400, "Google email address is required");
+        }
+
+        // Check if user exists in standard users table
+        let user = await prisma.user.findFirst({
+            where: {
+                email: email,
+            },
+        });
+
+        let role = null;
+        let isOrgUser = false;
+
+        if (user) {
+            role = user.role || "user";
+        } else {
+            // Check in org_users
+            user = await prisma.orgUser.findFirst({
+                where: {
+                    email: email,
+                },
+            });
+            if (user) {
+                role = "agency_admin";
+                isOrgUser = true;
+            }
+        }
+
+        // If user does not exist in DB:
+        if (!user) {
+            return res.status(200).json(
+                new ApiResponse(
+                    200,
+                    {
+                        exists: false,
+                        email: email,
+                        name: name || "",
+                        photoUrl: photoUrl || null,
+                    },
+                    "Account does not exist. Please complete registration."
+                )
+            );
+        }
+
+        // Check user status
+        if (user.status === "blocked") {
+            throw new ApiError(
+                403,
+                "Your account has been blocked. Please contact support."
+            );
+        }
+        if (isOrgUser && user.status === "pending") {
+            throw new ApiError(
+                403,
+                "Your organization registration is pending approval."
+            );
+        }
+        if (isOrgUser && user.status === "rejected") {
+            throw new ApiError(
+                403,
+                "Your organization registration request has been rejected."
+            );
+        }
+
+        // Build token & user payload
+        const agencyId = isOrgUser ? user.org_id : user.agency_id || null;
+        const resolvedUserId = isOrgUser ? user.org_id : user.user_id;
+
+        const token = jwt.sign(
+            {
+                id: resolvedUserId,
+                username: user.username,
+                role: role,
+                agencyId: agencyId,
+                agency_id: agencyId,
+                org_id: isOrgUser ? user.org_id : undefined,
+                is_test_data: Boolean(user.is_test_data),
+            },
+            process.env.JWT_SECRET || "your_secret_key",
+            { expiresIn: "7d" }
+        );
+
+        const userData = {
+            ...user,
+            id: resolvedUserId,
+            name: isOrgUser ? user.org_name : user.full_name,
+            role: role,
+            agencyId: agencyId,
+            agency_id: agencyId,
+            org_id: isOrgUser ? user.org_id : undefined,
+        };
+
+        if (role === "user") {
+            userData.walletBalance = user.wallet_balance
+                ? parseFloat(user.wallet_balance)
+                : 0.0;
+        }
+        delete userData.password_hash;
+
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    exists: true,
+                    user: userData,
+                    token,
+                    role,
+                },
+                "Login successful"
+            )
+        );
+    } catch (error) {
+        console.error("Error in googleAuth:", error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+
+/**
+ * Controller: Reset Password using OTP Verification Token
+ */
+const resetPassword = async (req, res) => {
+    try {
+        const {
+            phone_number,
+            otp_verification_token,
+            new_password,
+            confirm_password,
+        } = req.body;
+
+        if (!phone_number || !otp_verification_token || !new_password) {
+            throw new ApiError(
+                400,
+                "Phone number, OTP verification token, and new password are required"
+            );
+        }
+
+        if (confirm_password && new_password !== confirm_password) {
+            throw new ApiError(400, "Passwords do not match");
+        }
+
+        if (String(new_password).length < 6) {
+            throw new ApiError(
+                400,
+                "New password must be at least 6 characters long"
+            );
+        }
+
+        const cleanPhone = String(phone_number)
+            .trim()
+            .replace(/[^0-9+]/g, "");
+        const phoneSuffix =
+            cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+        const phoneFilter = {
+            OR: [
+                { phone_number: cleanPhone },
+                { phone_number: phoneSuffix },
+                { phone_number: `+91${phoneSuffix}` },
+                { phone_number: `91${phoneSuffix}` },
+            ],
+        };
+
+        // Find user by phone number (in users or org_users)
+        let user = await prisma.user.findFirst({
+            where: phoneFilter,
+        });
+        let isOrg = false;
+
+        if (!user) {
+            user = await prisma.orgUser.findFirst({
+                where: phoneFilter,
+            });
+            if (user) isOrg = true;
+        }
+
+        if (!user) {
+            throw new ApiError(
+                404,
+                "No registered account found with this phone number"
+            );
+        }
+
+        // Validate and consume the OTP token inside a transaction
+        await prisma.$transaction(async (tx) => {
+            await consumeVerificationToken(
+                cleanPhone,
+                otp_verification_token,
+                tx
+            );
+
+            // Hash new password
+            const newPasswordHash = await bcrypt.hash(new_password, 10);
+
+            if (isOrg) {
+                await tx.orgUser.update({
+                    where: { org_id: user.org_id },
+                    data: { password_hash: newPasswordHash },
+                });
+            } else {
+                await tx.user.update({
+                    where: { user_id: user.user_id },
+                    data: { password_hash: newPasswordHash },
+                });
+            }
+        });
+
+        // Clear any login attempt lockout
+        const userIdentifier =
+            user.email || user.username || String(user.user_id || user.org_id);
+        loginAttemptTracker.clearAttempts(userIdentifier);
+
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    null,
+                    "Password reset successfully. You can now login with your new password."
+                )
+            );
+    } catch (error) {
+        console.error("Error in resetPassword:", error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+
 module.exports = {
     registerUser,
     loginUser,
     loginUserSuperAdmin,
+    googleAuth,
+    resetPassword,
     getProfile,
     updateProfile,
     getPendingRequests,
@@ -1429,14 +2424,10 @@ module.exports = {
     updateStaff,
     deleteStaff,
     toggleStaffStatus,
-    getDashboardStats,
     listAllUsersDirectory,
     updateCustomerDetails,
     getUserStatusHistory,
+    getPendingVehicleRequests,
+    approveVehicleRequest,
+    rejectVehicleRequest,
 };
-
-// notification
-// approve reject rating of user
-// trade license mendetory and file upload
-// add upi during reg
-// handle payout logic

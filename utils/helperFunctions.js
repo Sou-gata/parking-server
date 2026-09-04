@@ -7,7 +7,8 @@ const saveBase64File = (base64String, folder, prefix) => {
 
     try {
         const [meta, data] = base64String.split("base64,");
-        const extension = meta.split("/")[1].split(";")[0] || "jpg";
+        const metaParts = meta.split("/");
+        const extension = (metaParts.length > 1) ? metaParts[1].split(";")[0] : "jpg";
         const filename = `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e4)}.${extension}`;
 
         // Path construction relative to the server root

@@ -7,9 +7,9 @@ const {
     getUserRatings,
     deleteRating,
 } = require("../controllers/rating.controller");
-const { verifyJWT, authorizeRoles } = require("../middlewares/auth.middleware");
+const { verifyJWT, optionalJWT, authorizeRoles } = require("../middlewares/auth.middleware");
 
-router.get("/agency/:agencyId", getAgencyRatings);
+router.get("/agency/:agencyId", optionalJWT, getAgencyRatings);
 router.get("/booking/:bookingId", verifyJWT, getBookingRatings);
 router.get("/user/:userId", verifyJWT, getUserRatings);
 router.post(

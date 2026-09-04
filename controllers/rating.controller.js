@@ -1,6 +1,7 @@
 const { prisma } = require("../utils/db");
 const { ApiError } = require("../utils/ApiError");
 const { ApiResponse } = require("../utils/ApiResponse");
+const { getIsTestUser } = require("../middlewares/auth.middleware");
 
 /**
  * Submit a rating & review after checkout.
@@ -123,8 +124,11 @@ const submitRating = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in submitRating:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         if (error.code === "P2002") {
             return res
                 .status(409)
@@ -179,8 +183,11 @@ const getBookingRatings = async (req, res) => {
         );
     } catch (error) {
         console.error("Error in getBookingRatings:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -205,11 +212,34 @@ const getAgencyRatings = async (req, res) => {
             throw new ApiError(400, "Invalid agencyId");
         }
 
+        const isTestUser = await getIsTestUser(req);
+
+        // Check target agency test status
+        const targetAgency = await prisma.orgUser.findUnique({
+            where: { org_id: parsedAgencyId },
+            select: { is_test_data: true },
+        });
+
+        if (!targetAgency || (!isTestUser && targetAgency.is_test_data)) {
+            throw new ApiError(404, "Agency not found");
+        }
+
         // Ratings given by users to this agency
         const whereClause = {
             agency_id: parsedAgencyId,
             rating_type: "user_to_agency",
         };
+
+        if (!isTestUser) {
+            const testUsers = await prisma.user.findMany({
+                where: { is_test_data: true },
+                select: { user_id: true },
+            });
+            const testUserIds = testUsers.map((u) => u.user_id);
+            if (testUserIds.length > 0) {
+                whereClause.user_id = { notIn: testUserIds };
+            }
+        }
 
         const [ratings, totalCount] = await Promise.all([
             prisma.rating.findMany({
@@ -284,8 +314,11 @@ const getAgencyRatings = async (req, res) => {
         );
     } catch (error) {
         console.error("Error in getAgencyRatings:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -314,17 +347,65 @@ const getUserRatings = async (req, res) => {
             );
         }
 
+        const isTestUser = await getIsTestUser(req);
+
+        // Fetch user profile details
+        const userObj = await prisma.user.findUnique({
+            where: { user_id: parsedUserId },
+            select: {
+                user_id: true,
+                full_name: true,
+                username: true,
+                email: true,
+                phone_number: true,
+                profile_photo_path: true,
+                status: true,
+                is_test_data: true,
+                created_at: true,
+            },
+        });
+
+        if (!userObj || (!isTestUser && userObj.is_test_data)) {
+            throw new ApiError(404, "User not found");
+        }
+
         // Fetch ratings received by user from agencies (agency_to_user)
-        const receivedRatings = await prisma.rating.findMany({
+        let receivedRatings = await prisma.rating.findMany({
             where: { user_id: parsedUserId, rating_type: "agency_to_user" },
             orderBy: { created_at: "desc" },
         });
 
         // Fetch ratings given by user to agencies (user_to_agency)
-        const givenRatings = await prisma.rating.findMany({
+        let givenRatings = await prisma.rating.findMany({
             where: { user_id: parsedUserId, rating_type: "user_to_agency" },
             orderBy: { created_at: "desc" },
         });
+
+        // Fetch agency details for display & test data filtering
+        const agencyIds = [
+            ...new Set([
+                ...receivedRatings.map((r) => r.agency_id),
+                ...givenRatings.map((r) => r.agency_id),
+            ]),
+        ];
+        const agencyWhere = { org_id: { in: agencyIds } };
+        if (!isTestUser) {
+            agencyWhere.is_test_data = false;
+        }
+        const agencies = await prisma.orgUser.findMany({
+            where: agencyWhere,
+            select: { org_id: true, org_name: true, is_test_data: true },
+        });
+        const validAgencySet = new Set(agencies.map((a) => a.org_id));
+        const agencyMap = {};
+        for (const a of agencies) {
+            agencyMap[a.org_id] = a.org_name;
+        }
+
+        if (!isTestUser) {
+            receivedRatings = receivedRatings.filter((r) => validAgencySet.has(r.agency_id));
+            givenRatings = givenRatings.filter((r) => validAgencySet.has(r.agency_id));
+        }
 
         // Calculate aggregate stats for received ratings (Customer rating score)
         const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
@@ -340,27 +421,23 @@ const getUserRatings = async (req, res) => {
                 ? parseFloat((sum / receivedRatings.length).toFixed(2))
                 : 0;
 
-        // Fetch agency names for display
-        const agencyIds = [
-            ...new Set([
-                ...receivedRatings.map((r) => r.agency_id),
-                ...givenRatings.map((r) => r.agency_id),
-            ]),
-        ];
-        const agencies = await prisma.orgUser.findMany({
-            where: { org_id: { in: agencyIds } },
-            select: { org_id: true, org_name: true },
-        });
-        const agencyMap = {};
-        for (const a of agencies) {
-            agencyMap[a.org_id] = a.org_name;
-        }
-
         return res.status(200).json(
             new ApiResponse(
                 200,
                 {
                     userId: parsedUserId,
+                    userProfile: userObj
+                        ? {
+                              id: userObj.user_id,
+                              fullName: userObj.full_name,
+                              username: userObj.username,
+                              email: userObj.email,
+                              phoneNumber: userObj.phone_number,
+                              profilePhoto: userObj.profile_photo_path,
+                              status: userObj.status,
+                              createdAt: userObj.created_at,
+                          }
+                        : null,
                     stats: {
                         averageRating,
                         totalCount: receivedRatings.length,
@@ -380,8 +457,11 @@ const getUserRatings = async (req, res) => {
         );
     } catch (error) {
         console.error("Error in getUserRatings:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -447,8 +527,11 @@ const deleteRating = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in deleteRating:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };

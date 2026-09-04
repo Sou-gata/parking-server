@@ -32,3 +32,6 @@ yarn-error.log*
 Thumbs.db
 /check-db.js
 /certs/*.*
+serviceAccountKey.json
+send-test-push.js
+apk/app-release.apk

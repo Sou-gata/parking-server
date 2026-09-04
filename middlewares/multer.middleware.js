@@ -14,6 +14,10 @@ const storage = multer.diskStorage({
             file.fieldname === "media"
         ) {
             dir = "./uploads/media";
+        } else if (
+            file.fieldname === "trade_license_document"
+        ) {
+            dir = "./uploads/documents";
         }
 
         if (!fs.existsSync(dir)) {

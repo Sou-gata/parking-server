@@ -3,6 +3,9 @@ const router = express.Router();
 const {
     registerUser,
     loginUser,
+    loginUserSuperAdmin,
+    googleAuth,
+    resetPassword,
     getProfile,
     updateProfile,
     getPendingRequests,
@@ -13,11 +16,12 @@ const {
     updateStaff,
     deleteStaff,
     toggleStaffStatus,
-    getDashboardStats,
-    loginUserSuperAdmin,
     listAllUsersDirectory,
     updateCustomerDetails,
     getUserStatusHistory,
+    getPendingVehicleRequests,
+    approveVehicleRequest,
+    rejectVehicleRequest,
 } = require("../controllers/user.controller");
 const { registerOrg } = require("../controllers/org.controller");
 const { upload } = require("../middlewares/multer.middleware");
@@ -39,6 +43,7 @@ router.post(
         { name: "profile_photo", maxCount: 1 },
         { name: "verification_document", maxCount: 1 },
         { name: "aadhaar_card", maxCount: 1 },
+        { name: "trade_license_document", maxCount: 1 },
         { name: "org_media", maxCount: 10 },
     ]),
     registerOrg
@@ -47,9 +52,10 @@ router.post(
 // Auth & Dashboard routes
 router.post("/login/super", loginUserSuperAdmin);
 router.post("/login", loginUser);
+router.post("/google-auth", googleAuth);
+router.post("/reset-password", resetPassword);
 router.get("/profile", verifyJWT, getProfile);
 router.put("/profile", verifyJWT, updateProfile);
-router.get("/dashboard-stats", verifyJWT, getDashboardStats);
 
 // Super Admin request approvals
 router.get(
@@ -69,6 +75,26 @@ router.post(
     verifyJWT,
     authorizeRoles("super_admin"),
     rejectOrgRequest
+);
+
+// Super Admin vehicle request approvals
+router.get(
+    "/vehicles/requests",
+    verifyJWT,
+    authorizeRoles("super_admin"),
+    getPendingVehicleRequests
+);
+router.post(
+    "/vehicles/requests/approve",
+    verifyJWT,
+    authorizeRoles("super_admin"),
+    approveVehicleRequest
+);
+router.post(
+    "/vehicles/requests/reject",
+    verifyJWT,
+    authorizeRoles("super_admin"),
+    rejectVehicleRequest
 );
 
 // Agency Admin staff management routes

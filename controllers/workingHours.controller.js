@@ -163,7 +163,15 @@ const updateWorkingHours = async (req, res) => {
             throw new ApiError(400, "Invalid agency ID");
         }
 
-        if (req.user.role !== "super_admin" && req.user.agencyId !== orgId) {
+        const userAgencyId =
+            req.user.agencyId ||
+            req.user.agency_id ||
+            req.user.org_id ||
+            req.user.id;
+        if (
+            req.user.role !== "super_admin" &&
+            String(userAgencyId) !== String(orgId)
+        ) {
             throw new ApiError(
                 403,
                 "Access denied: You can only update working hours for your own agency"

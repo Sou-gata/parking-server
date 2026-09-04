@@ -20,6 +20,8 @@ const {
     getPendingAgencySettlements,
     approveAgencySettlementHandler,
     rejectAgencySettlementHandler,
+    getAgencyWalletSummary,
+    getAgencySettlementsAuditTrail,
 } = require("../controllers/wallet.controller");
 const { verifyJWT, authorizeRoles } = require("../middlewares/auth.middleware");
 const { upload } = require("../middlewares/multer.middleware");
@@ -116,19 +118,19 @@ router.post(
 router.get(
     "/agency/settlements/pending",
     verifyJWT,
-    authorizeRoles("super_admin"),
+    authorizeRoles("super_admin", "authority_admin"),
     getPendingAgencySettlements
 );
 router.post(
     "/agency/settlements/:transactionId/approve",
     verifyJWT,
-    authorizeRoles("super_admin"),
+    authorizeRoles("super_admin", "authority_admin"),
     approveAgencySettlementHandler
 );
 router.post(
     "/agency/settlements/:transactionId/reject",
     verifyJWT,
-    authorizeRoles("super_admin"),
+    authorizeRoles("super_admin", "authority_admin"),
     rejectAgencySettlementHandler
 );
 
@@ -151,6 +153,19 @@ router.post(
     verifyJWT,
     authorizeRoles("super_admin", "authority_admin"),
     updateWalletConfig
+);
+router.get(
+    "/agency/:id/summary",
+    verifyJWT,
+    authorizeRoles("super_admin", "authority_admin"),
+    getAgencyWalletSummary
+);
+
+router.get(
+    "/agency/settlements/history",
+    verifyJWT,
+    authorizeRoles("super_admin", "authority_admin"),
+    getAgencySettlementsAuditTrail
 );
 
 module.exports = router;

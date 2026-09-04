@@ -3,6 +3,7 @@ const bcrypt = require("bcrypt");
 const { ApiError } = require("../utils/ApiError");
 const { ApiResponse } = require("../utils/ApiResponse");
 const { saveBase64File, cleanupUploadedFiles } = require("../utils/helperFunctions");
+const { consumeVerificationToken } = require("./otp.controller");
 
 const registerOrg = async (req, res) => {
     const savedFiles = [];
@@ -20,6 +21,7 @@ const registerOrg = async (req, res) => {
             profile_photo, // Base64 string from app
             verification_document, // Base64 string from app
             aadhaar_card, // Base64 string from app
+            trade_license_document, // Base64 string from app
             two_wheeler_capacity,
             three_wheeler_capacity,
             four_wheeler_capacity, // Shared mapping from app
@@ -34,15 +36,16 @@ const registerOrg = async (req, res) => {
             zoning_clearance,
             shops_establishment_license,
             gst_registration,
+            otp_verification_token,
         } = req.body;
 
         // Validation
         if (
-            [org_name, username, email, password].some(
-                (f) => !f || f.trim() === ""
+            [org_name, username, email, phone_number, password].some(
+                (f) => !f || String(f).trim() === ""
             )
         ) {
-            throw new ApiError(400, "Required fields are missing");
+            throw new ApiError(400, "Required fields (including Phone Number) are missing");
         }
 
         // Save Files from FormData (Multer) or Base64 Fallback
@@ -91,8 +94,35 @@ const registerOrg = async (req, res) => {
             }
         }
 
+        // Trade License Document
+        let tradeLicenseDocPath = req.files?.["trade_license_document"]?.[0]?.path
+            ? req.files["trade_license_document"][0].path
+                  .replace(/\\/g, "/")
+                  .replace(/^uploads\//, "")
+            : null;
+        if (!tradeLicenseDocPath && trade_license_document) {
+            const saved = saveBase64File(
+                trade_license_document,
+                "documents",
+                "trade_license"
+            );
+            if (saved) {
+                savedFiles.push(saved);
+                tradeLicenseDocPath = saved.replace(/^uploads\//, "");
+            }
+        }
+
+        // Validate: if trade_license is declared true, document is mandatory
+        const isTradeLicenseTrue = trade_license === true || trade_license === "true" || trade_license === "yes";
+        if (isTradeLicenseTrue && !tradeLicenseDocPath) {
+            throw new ApiError(400, "Trade License document is required when Trade License is declared as Yes");
+        }
+
         // Use transaction to check existence and insert org
         await prisma.$transaction(async (tx) => {
+            // Verify OTP Token before creating agency user
+            await consumeVerificationToken(phone_number, otp_verification_token, tx);
+
             const existing = await tx.orgUser.findFirst({
                 where: {
                     OR: [{ username: username }, { email: email }],
@@ -138,7 +168,8 @@ const registerOrg = async (req, res) => {
                     ev_capacity: parseInt(ev_capacity) || 0,
                     ev_charging_support: ev_charging_support === true || ev_charging_support === "true" || ev_charging_support === "yes",
                     cctv_available: cctv_available === true || cctv_available === "true" || cctv_available === "yes",
-                    trade_license: trade_license === true || trade_license === "true" || trade_license === "yes",
+                    trade_license: isTradeLicenseTrue,
+                    trade_license_document_path: tradeLicenseDocPath || null,
                     zoning_clearance: zoning_clearance === true || zoning_clearance === "true" || zoning_clearance === "yes",
                     shops_establishment_license: shops_establishment_license === true || shops_establishment_license === "true" || shops_establishment_license === "yes",
                     gst_registration: gst_registration === true || gst_registration === "true" || gst_registration === "yes",

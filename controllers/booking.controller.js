@@ -2,6 +2,418 @@ const { prisma } = require("../utils/db");
 const { ApiError } = require("../utils/ApiError");
 const { ApiResponse } = require("../utils/ApiResponse");
 const { distributePaymentCommission } = require("../utils/commission");
+const { notifyUserWithFCM } = require("../utils/notifications");
+const { getIsTestUser } = require("../middlewares/auth.middleware");
+const { isBookingNoShowOrExpired } = require("../utils/expiredBookingsJob");
+
+/**
+ * Maps vehicle type string to the appropriate capacity column in org_users
+ * and known vehicle type aliases for matching in bookings table.
+ */
+const getVehicleTypeConfig = (vehicleType) => {
+    const raw = (vehicleType || "").toLowerCase().replace(/[-_\s]/g, "");
+
+    if (
+        raw.includes("twowheeler") ||
+        raw === "twowheeler" ||
+        raw === "bike" ||
+        raw === "motorcycle" ||
+        raw === "scooter"
+    ) {
+        return {
+            capacityField: "two_wheeler_capacity",
+            variants: [
+                "twoWheeler",
+                "two_wheeler",
+                "twowheeler",
+                "two-wheeler",
+                "bike",
+                "motorcycle",
+                "scooter",
+            ],
+        };
+    }
+    if (
+        raw.includes("threewheeler") ||
+        raw === "threewheeler" ||
+        raw === "rickshaw" ||
+        raw === "auto"
+    ) {
+        return {
+            capacityField: "three_wheeler_capacity",
+            variants: [
+                "threeWheeler",
+                "three_wheeler",
+                "threewheeler",
+                "three-wheeler",
+                "auto",
+                "rickshaw",
+            ],
+        };
+    }
+    if (
+        raw === "car" ||
+        raw === "fourwheeler" ||
+        raw === "sedan" ||
+        raw === "hatchback"
+    ) {
+        return {
+            capacityField: "car_capacity",
+            variants: ["car", "fourWheeler", "four_wheeler", "sedan", "hatchback"],
+        };
+    }
+    if (
+        raw === "suv" ||
+        raw === "muv" ||
+        raw.includes("suv") ||
+        raw.includes("muv")
+    ) {
+        return {
+            capacityField: "suv_capacity",
+            variants: ["suv", "suv_capacity", "suv / muv", "muv", "SUV / MUV"],
+        };
+    }
+    if (raw === "van") {
+        return {
+            capacityField: "van_capacity",
+            variants: ["van"],
+        };
+    }
+    if (raw === "pickup" || raw.includes("pickup")) {
+        return {
+            capacityField: "pickup_capacity",
+            variants: ["pickup", "pickup truck", "Pickup Truck"],
+        };
+    }
+    if (raw === "ev" || raw.includes("electric")) {
+        return {
+            capacityField: "ev_capacity",
+            variants: ["ev", "electric", "EV"],
+        };
+    }
+
+    return {
+        capacityField: `${vehicleType}_capacity`,
+        variants: [vehicleType],
+    };
+};
+
+/**
+ * Calculates slot availability for a given agency, vehicle type, and time window.
+ * An active booking [bStart, bEnd] conflicts if and only if:
+ *   bStart < reqEnd && bEnd > reqStart
+ */
+const checkSlotAvailability = async (
+    agencyId,
+    vehicleType,
+    startTime,
+    endTime
+) => {
+    const agency = await prisma.orgUser.findUnique({
+        where: { org_id: agencyId },
+        select: {
+            two_wheeler_capacity: true,
+            three_wheeler_capacity: true,
+            car_capacity: true,
+            suv_capacity: true,
+            van_capacity: true,
+            pickup_capacity: true,
+            ev_capacity: true,
+        },
+    });
+
+    if (!agency) {
+        throw new ApiError(404, "Agency not found");
+    }
+
+    const { capacityField, variants } = getVehicleTypeConfig(vehicleType);
+    const capacity = Number(agency[capacityField] ?? agency.car_capacity ?? 0);
+
+    const reqStart = new Date(startTime);
+    const reqEnd = new Date(endTime);
+
+    if (isNaN(reqStart.getTime()) || isNaN(reqEnd.getTime())) {
+        throw new ApiError(400, "Invalid start or end time format");
+    }
+
+    if (reqEnd <= reqStart) {
+        throw new ApiError(400, "End time must be after start time");
+    }
+
+    const now = new Date();
+    const durationMs = reqEnd.getTime() - reqStart.getTime();
+
+    // Fetch active bookings for this agency with matching vehicle type variants
+    const activeBookings = await prisma.booking.findMany({
+        where: {
+            agency_id: agencyId,
+            vehicle_type: { in: variants },
+            status: { in: ["booked", "checked_in", "pending_approval"] },
+        },
+        select: {
+            booking_id: true,
+            booking_code: true,
+            status: true,
+            booking_start_time: true,
+            booking_end_time: true,
+            start_time: true,
+            end_time: true,
+            checkin_time: true,
+            booked_duration: true,
+            created_at: true,
+        },
+    });
+
+    // Parse all active bookings into normalized [bStart, bEnd] intervals
+    const parsedBookings = activeBookings
+        .map((b) => {
+            const bStartRaw =
+                b.booking_start_time ||
+                b.start_time ||
+                b.checkin_time ||
+                b.created_at;
+            if (!bStartRaw) return null;
+
+            const bStart = new Date(bStartRaw);
+            if (isNaN(bStart.getTime())) return null;
+
+            let bEnd;
+            if (b.booking_end_time) {
+                bEnd = new Date(b.booking_end_time);
+            } else if (b.end_time) {
+                bEnd = new Date(b.end_time);
+            } else {
+                const durHours = parseFloat(b.booked_duration) || 1;
+                bEnd = new Date(bStart.getTime() + durHours * 3600000);
+            }
+
+            // If currently checked in and vehicle has overstayed, keep holding the slot
+            if (b.status === "checked_in" && bEnd < now) {
+                bEnd = now;
+            }
+
+            return { id: b.booking_id, start: bStart, end: bEnd };
+        })
+        .filter(Boolean);
+
+    // Check time interval overlap for the requested window [reqStart, reqEnd]
+    const overlappingBookings = parsedBookings.filter(
+        (b) => b.start < reqEnd && b.end > reqStart
+    );
+
+    const bookedCount = overlappingBookings.length;
+    const availableSpots = Math.max(0, capacity - bookedCount);
+    const isAvailable = capacity > 0 && availableSpots > 0;
+
+    let nextAvailableFrom = null;
+    let nextAvailableWindow = null;
+
+    // When no spots are available, compute the next time a slot will be available
+    if (!isAvailable && capacity > 0) {
+        // Fetch agency working hours for valid operating hours checking
+        const wh = await prisma.orgWorkingHours.findUnique({
+            where: { org_id: agencyId },
+        });
+
+        const getOccupancyAt = (t) => {
+            let count = 0;
+            for (const b of parsedBookings) {
+                if (b.start <= t && b.end > t) {
+                    count++;
+                }
+            }
+            return count;
+        };
+
+        const isIntervalFree = (wStart, wEnd) => {
+            const points = [wStart, wEnd];
+            for (const b of parsedBookings) {
+                if (b.start > wStart && b.start < wEnd) points.push(b.start);
+                if (b.end > wStart && b.end < wEnd) points.push(b.end);
+            }
+            points.sort((a, b) => a.getTime() - b.getTime());
+
+            for (let i = 0; i < points.length - 1; i++) {
+                const mid = new Date(
+                    (points[i].getTime() + points[i + 1].getTime()) / 2
+                );
+                if (getOccupancyAt(mid) >= capacity) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        const DAYS = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+
+        const alignToWorkingHours = (date) => {
+            if (!wh || wh.is_24_7) return date;
+            let dailySchedules = null;
+            try {
+                dailySchedules = wh.daily_schedules
+                    ? JSON.parse(wh.daily_schedules)
+                    : null;
+            } catch (e) {}
+
+            let cursor = new Date(date);
+            for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+                const dayName = DAYS[cursor.getDay()];
+                const sched = dailySchedules ? dailySchedules[dayName] : null;
+                if (!sched || sched.isOpen !== false) {
+                    const [oh, om] = (
+                        sched?.openTime ||
+                        wh.open_time ||
+                        "08:00"
+                    )
+                        .split(":")
+                        .map(Number);
+                    const [ch, cm] = (
+                        sched?.closeTime ||
+                        wh.close_time ||
+                        "20:00"
+                    )
+                        .split(":")
+                        .map(Number);
+                    const curMins = cursor.getHours() * 60 + cursor.getMinutes();
+                    const openMins = (oh || 8) * 60 + (om || 0);
+                    const closeMins = (ch || 20) * 60 + (cm || 0);
+
+                    if (curMins < openMins) {
+                        cursor.setHours(oh || 8, om || 0, 0, 0);
+                        return cursor;
+                    }
+                    if (curMins < closeMins) {
+                        return cursor;
+                    }
+                }
+                cursor.setDate(cursor.getDate() + 1);
+                cursor.setHours(0, 0, 0, 0);
+            }
+            return date;
+        };
+
+        const rawCandidates = [
+            new Date(Math.max(reqStart.getTime(), now.getTime())),
+        ];
+        for (const b of parsedBookings) {
+            if (b.end >= reqStart) {
+                rawCandidates.push(new Date(b.end.getTime()));
+            }
+        }
+
+        rawCandidates.sort((a, b) => a.getTime() - b.getTime());
+
+        const uniqueCandidates = [];
+        for (const cand of rawCandidates) {
+            const aligned = alignToWorkingHours(cand);
+            if (
+                !uniqueCandidates.some(
+                    (u) => Math.abs(u.getTime() - aligned.getTime()) < 1000
+                )
+            ) {
+                uniqueCandidates.push(aligned);
+            }
+        }
+
+        // 1. Earliest instant when at least 1 spot is free
+        for (const cand of uniqueCandidates) {
+            if (getOccupancyAt(cand) < capacity) {
+                nextAvailableFrom = cand.toISOString();
+                break;
+            }
+        }
+
+        // 2. Earliest window available for the full duration
+        for (const cand of uniqueCandidates) {
+            const candEnd = new Date(cand.getTime() + durationMs);
+            if (isIntervalFree(cand, candEnd)) {
+                nextAvailableWindow = {
+                    startTime: cand.toISOString(),
+                    endTime: candEnd.toISOString(),
+                };
+                if (!nextAvailableFrom) {
+                    nextAvailableFrom = cand.toISOString();
+                }
+                break;
+            }
+        }
+
+        // Fallback: After all existing bookings end
+        if (!nextAvailableWindow && parsedBookings.length > 0) {
+            const latestEndMs = Math.max(
+                reqStart.getTime(),
+                now.getTime(),
+                ...parsedBookings.map((b) => b.end.getTime())
+            );
+            const fallbackStart = alignToWorkingHours(new Date(latestEndMs));
+            const fallbackEnd = new Date(fallbackStart.getTime() + durationMs);
+            nextAvailableFrom = nextAvailableFrom || fallbackStart.toISOString();
+            nextAvailableWindow = {
+                startTime: fallbackStart.toISOString(),
+                endTime: fallbackEnd.toISOString(),
+            };
+        }
+    }
+
+    return {
+        agencyId,
+        vehicleType,
+        capacity,
+        bookedCount,
+        availableSpots,
+        isAvailable,
+        nextAvailableFrom,
+        nextAvailableWindow,
+    };
+};
+
+/**
+ * Public/Secured endpoint: Check slot availability for agency and vehicle type over a time slot
+ */
+const getSlotAvailability = async (req, res) => {
+    try {
+        const { agencyId, vehicleType, startTime, endTime } = req.query;
+
+        if (!agencyId || !vehicleType || !startTime || !endTime) {
+            throw new ApiError(
+                400,
+                "Query parameters agencyId, vehicleType, startTime, and endTime are required"
+            );
+        }
+
+        const parsedAgencyId = parseInt(agencyId);
+        if (isNaN(parsedAgencyId)) {
+            throw new ApiError(400, "Invalid agency ID");
+        }
+
+        const result = await checkSlotAvailability(
+            parsedAgencyId,
+            vehicleType,
+            startTime,
+            endTime
+        );
+
+        return new ApiResponse(
+            200,
+            result,
+            "Slot availability fetched successfully"
+        ).send(res);
+    } catch (error) {
+        console.error("Error in getSlotAvailability:", error);
+        if (error instanceof ApiError) {
+            return new ApiError(error.statusCode, error.message).send(res);
+        }
+        return new ApiError(500, error.message).send(res);
+    }
+};
 
 /**
  * Create a new booking
@@ -39,6 +451,12 @@ const createBooking = async (req, res) => {
             throw new ApiError(400, "Invalid agency ID");
         }
 
+        const bStart = startTime ? new Date(startTime) : new Date();
+        const durationHours = parseFloat(bookedDuration) || 1;
+        const bEnd = endTime
+            ? new Date(endTime)
+            : new Date(bStart.getTime() + durationHours * 3600000);
+
         // Validate working hours, working days, and special vacations for the agency
         const workingHoursRecord = await prisma.orgWorkingHours.findUnique({
             where: { org_id: parsedAgencyId },
@@ -69,12 +487,6 @@ const createBooking = async (req, res) => {
                 workingHoursRecord.special_vacations,
                 []
             );
-
-            const bStart = startTime ? new Date(startTime) : new Date();
-            const durationHours = parseFloat(bookedDuration) || 1;
-            const bEnd = endTime
-                ? new Date(endTime)
-                : new Date(bStart.getTime() + durationHours * 3600000);
 
             // 1. Check Special Vacations
             for (const v of vacations) {
@@ -246,12 +658,25 @@ const createBooking = async (req, res) => {
             }
         }
 
-        // Check if agency requires booking approval
+        // Check if agency requires booking approval and get coordinates
+        const isTestUser = await getIsTestUser(req);
         const agencyRecord = await prisma.orgUser.findUnique({
             where: { org_id: parsedAgencyId },
-            select: { require_booking_approval: true },
+            select: {
+                is_test_data: true,
+                require_booking_approval: true,
+                org_address: true,
+                landmark: true,
+                latitude: true,
+                longitude: true,
+            },
         });
-        const requireApproval = agencyRecord ? Boolean(agencyRecord.require_booking_approval) : false;
+
+        if (!agencyRecord || (!isTestUser && agencyRecord.is_test_data)) {
+            throw new ApiError(404, "Agency not found or unavailable");
+        }
+
+        const requireApproval = Boolean(agencyRecord.require_booking_approval);
         const initialStatus = requireApproval ? "pending_approval" : "booked";
 
         // Generate a unique booking code: PK-XXXX
@@ -268,6 +693,21 @@ const createBooking = async (req, res) => {
 
         // Generate a random 6-digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Validate slot availability for requested vehicle type and time window
+        const slotAvailability = await checkSlotAvailability(
+            parsedAgencyId,
+            vehicleType,
+            bStart,
+            bEnd
+        );
+
+        if (!slotAvailability.isAvailable) {
+            throw new ApiError(
+                400,
+                `No parking spots are available for ${vehicleType} during the selected time slot (${slotAvailability.availableSpots} of ${slotAvailability.capacity} spots free).`
+            );
+        }
 
         const newBooking = await prisma.booking.create({
             data: {
@@ -295,6 +735,52 @@ const createBooking = async (req, res) => {
         });
 
         const cleanBooking = mapBookingToCamelCase(newBooking);
+        if (agencyRecord) {
+            cleanBooking.latitude = agencyRecord.latitude ? Number(agencyRecord.latitude) : null;
+            cleanBooking.longitude = agencyRecord.longitude ? Number(agencyRecord.longitude) : null;
+            cleanBooking.address = agencyRecord.org_address || "";
+            cleanBooking.landmark = agencyRecord.landmark || "";
+        }
+
+        // If booking approval is enabled for this agency, notify parking owner via push notification
+        if (requireApproval) {
+            try {
+                const agencyStaff = await prisma.user.findMany({
+                    where: { agency_id: parsedAgencyId },
+                    select: { user_id: true },
+                });
+                const recipientIds = Array.from(
+                    new Set([
+                        parsedAgencyId,
+                        ...agencyStaff.map((u) => u.user_id),
+                    ])
+                );
+
+                const ownerNotification = {
+                    type: "booking_approval_required",
+                    title: "New Booking Request",
+                    message: `New booking request from ${userName} for ${vehicleNumber} (${bookingCode}). Approval required.`,
+                    data: {
+                        type: "booking_approval_required",
+                        bookingId: newBooking.booking_id.toString(),
+                        bookingCode: newBooking.booking_code,
+                        vehicleNumber: vehicleNumber || "",
+                        vehicleType: vehicleType || "",
+                        userName: userName || "",
+                        agencyId: parsedAgencyId.toString(),
+                    },
+                };
+
+                for (const recipientId of recipientIds) {
+                    await notifyUserWithFCM(recipientId, ownerNotification);
+                }
+            } catch (ownerNotifyErr) {
+                console.error(
+                    "Error sending booking approval push notification to parking owner:",
+                    ownerNotifyErr
+                );
+            }
+        }
 
         return new ApiResponse(
             201,
@@ -336,7 +822,44 @@ const getUserBookings = async (req, res) => {
             orderBy: { created_at: "desc" },
         });
 
-        const mappedBookings = bookings.map(mapBookingToCamelCase);
+        // Fetch agency details for all agency_ids in bookings
+        const agencyIds = [
+            ...new Set(
+                bookings
+                    .map((b) => b.agency_id)
+                    .filter((id) => id !== null && id !== undefined)
+            ),
+        ];
+
+        let agencyMap = {};
+        if (agencyIds.length > 0) {
+            const agencies = await prisma.orgUser.findMany({
+                where: { org_id: { in: agencyIds } },
+                select: {
+                    org_id: true,
+                    org_name: true,
+                    org_address: true,
+                    landmark: true,
+                    latitude: true,
+                    longitude: true,
+                },
+            });
+            agencies.forEach((a) => {
+                agencyMap[a.org_id] = a;
+            });
+        }
+
+        const mappedBookings = bookings.map((b) => {
+            const mapped = mapBookingToCamelCase(b);
+            const agency = agencyMap[b.agency_id];
+            if (agency) {
+                mapped.latitude = agency.latitude ? Number(agency.latitude) : null;
+                mapped.longitude = agency.longitude ? Number(agency.longitude) : null;
+                mapped.address = agency.org_address || "";
+                mapped.landmark = agency.landmark || "";
+            }
+            return mapped;
+        });
 
         return new ApiResponse(
             200,
@@ -356,6 +879,33 @@ const getUserBookings = async (req, res) => {
  */
 function mapBookingToCamelCase(b) {
     if (!b) return null;
+    const bookedDuration = parseFloat(b.booked_duration || 0);
+    const hourlyRate = parseFloat(b.hourly_rate || 0);
+    const totalBill = parseFloat(b.total_bill || 0);
+    const baseCost = parseFloat((bookedDuration * hourlyRate).toFixed(2));
+    
+    let overtimeCost = 0;
+    let overtimeDuration = 0;
+
+    if (b.status === "completed") {
+        if (totalBill > baseCost) {
+            overtimeCost = parseFloat((totalBill - baseCost).toFixed(2));
+            if (hourlyRate > 0) {
+                overtimeDuration = parseFloat((overtimeCost / hourlyRate).toFixed(2));
+            }
+        }
+    } else if (b.status === "checked_in" && (b.checkin_time || b.start_time)) {
+        const start = new Date(b.checkin_time || b.start_time);
+        const end = b.checkout_time ? new Date(b.checkout_time) : new Date();
+        const diffMs = end - start;
+        const actualDurHours = Math.max(1, Math.ceil((diffMs / (1000 * 60 * 60)) * 2) / 2);
+        const estTotalBill = parseFloat((actualDurHours * hourlyRate).toFixed(2));
+        if (estTotalBill > baseCost) {
+            overtimeCost = parseFloat((estTotalBill - baseCost).toFixed(2));
+            overtimeDuration = Math.max(0, parseFloat((actualDurHours - bookedDuration).toFixed(2)));
+        }
+    }
+
     return {
         id: b.booking_id,
         bookingCode: b.booking_code,
@@ -373,9 +923,13 @@ function mapBookingToCamelCase(b) {
         bookingEndTime: b.booking_end_time,
         checkinTime: b.checkin_time,
         checkoutTime: b.checkout_time,
-        bookedDuration: parseFloat(b.booked_duration || 0),
-        hourlyRate: parseFloat(b.hourly_rate || 0),
-        totalBill: parseFloat(b.total_bill || 0),
+        bookedDuration,
+        hourlyRate,
+        baseCost,
+        overtimeCost,
+        overtimeDuration,
+        isOvertime: overtimeCost > 0,
+        totalBill,
         paymentStatus: b.payment_status,
         otp: b.otp,
         refundAmount: parseFloat(b.refund_amount || 0),
@@ -605,6 +1159,27 @@ const checkIn = async (req, res) => {
             },
         });
 
+        // Notify user when vehicle is parked
+        if (updated.user_id) {
+            try {
+                await notifyUserWithFCM(updated.user_id, {
+                    type: "vehicle_parked",
+                    title: "Vehicle Parked",
+                    message: `Your vehicle (${updated.vehicle_number}) has been parked successfully at ${updated.agency_name}.`,
+                    data: {
+                        type: "vehicle_parked",
+                        bookingId: updated.booking_id.toString(),
+                        bookingCode: updated.booking_code,
+                        vehicleNumber: updated.vehicle_number,
+                        agencyName: updated.agency_name,
+                        checkinTime: updated.checkin_time ? updated.checkin_time.toISOString() : new Date().toISOString(),
+                    },
+                });
+            } catch (notifyErr) {
+                console.error(`Error notifying user ${updated.user_id} of vehicle check-in:`, notifyErr);
+            }
+        }
+
         return new ApiResponse(
             200,
             {
@@ -673,6 +1248,7 @@ const checkOut = async (req, res) => {
 
         const bookingCost = parseFloat(booking.booked_duration || 0) * parseFloat(booking.hourly_rate);
         const finalBill = parseFloat(Math.max(totalBill, bookingCost).toFixed(2));
+        const isOvertime = totalBill > bookingCost;
 
         let updated;
         if (booking.user_id) {
@@ -686,7 +1262,10 @@ const checkOut = async (req, res) => {
                 }
 
                 const currentBalance = parseFloat(user.wallet_balance || 0);
-                const newBalance = currentBalance - finalBill;
+                // Wallet balance can go negative ONLY for parking overtime
+                const newBalance = isOvertime
+                    ? currentBalance - finalBill
+                    : Math.max(0, currentBalance - finalBill);
 
                 await tx.user.update({
                     where: { user_id: booking.user_id },
@@ -697,6 +1276,8 @@ const checkOut = async (req, res) => {
                     data: {
                         user_id: booking.user_id,
                         amount: finalBill,
+                        previous_balance: currentBalance,
+                        new_balance: newBalance,
                         type: "withdrawal",
                         status: "approved",
                         transaction_number: `PARKING-${booking.booking_code}`,
@@ -735,6 +1316,12 @@ const checkOut = async (req, res) => {
             });
         }
 
+        const baseCost = parseFloat((parseFloat(updated.booked_duration || 0) * parseFloat(updated.hourly_rate || 0)).toFixed(2));
+        const updatedTotalBill = parseFloat(updated.total_bill);
+        const overtimeCost = Math.max(0, parseFloat((updatedTotalBill - baseCost).toFixed(2)));
+        const hourlyRate = parseFloat(updated.hourly_rate || 0);
+        const overtimeDuration = overtimeCost > 0 && hourlyRate > 0 ? parseFloat((overtimeCost / hourlyRate).toFixed(2)) : 0;
+
         return new ApiResponse(
             200,
             {
@@ -744,7 +1331,13 @@ const checkOut = async (req, res) => {
                 endTime: updated.end_time,
                 checkinTime: updated.checkin_time,
                 checkoutTime: updated.checkout_time,
-                totalBill: parseFloat(updated.total_bill),
+                bookedDuration: parseFloat(updated.booked_duration || 0),
+                hourlyRate,
+                baseCost,
+                overtimeCost,
+                overtimeDuration,
+                isOvertime: overtimeCost > 0,
+                totalBill: updatedTotalBill,
                 paymentStatus: updated.payment_status,
             },
             "Vehicle checked out successfully and billed"
@@ -810,7 +1403,7 @@ const previewCancelBooking = async (req, res) => {
             throw new ApiError(403, "Access denied: Unauthorized to preview this booking cancellation");
         }
 
-        if (booking.status !== "booked") {
+        if (booking.status !== "booked" && booking.status !== "pending_approval") {
             throw new ApiError(
                 400,
                 `Cannot cancel booking because it is already '${booking.status}'`
@@ -830,8 +1423,8 @@ const previewCancelBooking = async (req, res) => {
             minutesRemaining = (bookingStartTime.getTime() - now.getTime()) / (1000 * 60);
         }
 
-        // Apply rules only if user is customer ("user")
-        if (req.user.role === "user") {
+        // Apply rules only if user is customer ("user") and booking is already approved ("booked")
+        if (req.user.role === "user" && booking.status === "booked") {
             if (bookingStartTime && minutesRemaining <= 0) {
                 allowCancellation = false;
             } else {
@@ -913,7 +1506,7 @@ const cancelBooking = async (req, res) => {
             );
         }
 
-        if (booking.status !== "booked") {
+        if (booking.status !== "booked" && booking.status !== "pending_approval") {
             throw new ApiError(
                 400,
                 `Cannot cancel booking because it is already '${booking.status}'`
@@ -932,8 +1525,8 @@ const cancelBooking = async (req, res) => {
             minutesRemaining = (bookingStartTime.getTime() - now.getTime()) / (1000 * 60);
         }
 
-        // Apply rules only if user is customer ("user")
-        if (req.user.role === "user") {
+        // Apply rules only if user is customer ("user") and booking is already approved ("booked")
+        if (req.user.role === "user" && booking.status === "booked") {
             if (bookingStartTime && minutesRemaining <= 0) {
                 throw new ApiError(400, "Cannot cancel booking. The scheduled start time has already passed.");
             }
@@ -981,7 +1574,8 @@ const cancelBooking = async (req, res) => {
                 }
 
                 const currentBalance = parseFloat(user.wallet_balance || 0);
-                const newBalance = currentBalance - chargeAmount;
+                // Cancellation fee is not parking overtime, so balance cannot drop below 0
+                const newBalance = Math.max(0, currentBalance - chargeAmount);
 
                 await tx.user.update({
                     where: { user_id: booking.user_id },
@@ -992,6 +1586,8 @@ const cancelBooking = async (req, res) => {
                     data: {
                         user_id: booking.user_id,
                         amount: chargeAmount,
+                        previous_balance: currentBalance,
+                        new_balance: newBalance,
                         type: "withdrawal",
                         status: "approved",
                         transaction_number: `CANCEL-${booking.booking_code}`,
@@ -1175,6 +1771,8 @@ const processBookingRefund = async (req, res) => {
                 data: {
                     user_id: booking.user_id,
                     amount: refundAmount,
+                    previous_balance: currentBalance,
+                    new_balance: newBalance,
                     type: "deposit",
                     status: "approved",
                     transaction_number: `REFUND-${booking.booking_code}`,
@@ -1444,12 +2042,78 @@ const updateBookingApprovalStatus = async (req, res) => {
         }
 
         // Find bookings that actually need status change (not already in target state)
-        const bookingsToUpdate = bookings.filter((b) => {
+        let bookingsToUpdate = bookings.filter((b) => {
             const s = (b.status || "").toLowerCase().trim();
             if (validAction === "approve") return s !== "booked";
             if (validAction === "reject") return s !== "rejected";
             return true;
         });
+
+        // Check for expired pending bookings if approving
+        // Rule: Cancelled only if user does not show up after 1h of booking start time OR booking time is over (whichever comes earlier)
+        if (validAction === "approve") {
+            const expiredPendingBookings = bookingsToUpdate.filter((b) => {
+                const s = (b.status || "").toLowerCase().trim();
+                return (
+                    (s === "pending_approval" || s === "pending") &&
+                    isBookingNoShowOrExpired(b, now)
+                );
+            });
+
+            if (expiredPendingBookings.length > 0) {
+                const expiredIds = expiredPendingBookings.map(
+                    (b) => b.booking_id
+                );
+                // Auto-cancel these expired pending bookings immediately (Zero deduction)
+                await prisma.booking.updateMany({
+                    where: { booking_id: { in: expiredIds } },
+                    data: {
+                        status: "cancelled",
+                        total_bill: 0,
+                        payment_status: "cancelled",
+                        is_force_cancelled: true,
+                        cancelled_by: "system",
+                        cancellation_reason:
+                            "Auto-cancelled: User did not show up within 1 hour of scheduled start time or booking time ended without agency approval.",
+                    },
+                });
+
+                // Notify users of auto-cancellation
+                for (const b of expiredPendingBookings) {
+                    if (b.user_id) {
+                        await notifyUserWithFCM(b.user_id, {
+                            type: "booking_cancelled",
+                            title: "Booking Request Expired",
+                            message: `Your booking request (${b.booking_code}) at ${b.agency_name} was automatically cancelled because it was not approved or checked in within the allowed time (1 hour after start time or end of booking). No amount was deducted.`,
+                            data: {
+                                type: "booking_cancelled",
+                                bookingId: b.booking_id.toString(),
+                                bookingCode: b.booking_code,
+                                status: "cancelled",
+                            },
+                        }).catch((err) =>
+                            console.error(
+                                "Error notifying user of expired booking:",
+                                err
+                            )
+                        );
+                    }
+                }
+
+                // If all selected bookings were expired, fail early
+                if (expiredPendingBookings.length === bookingsToUpdate.length) {
+                    throw new ApiError(
+                        400,
+                        "Cannot approve booking(s): The allowed check-in window (1 hour after start time or end of booking) has already passed. The booking(s) have been cancelled without any charge."
+                    );
+                }
+
+                // Exclude expired ones from the approval list
+                bookingsToUpdate = bookingsToUpdate.filter(
+                    (b) => !expiredIds.includes(b.booking_id)
+                );
+            }
+        }
 
         const pendingBookingIds = bookingsToUpdate.map((b) => b.booking_id);
 
@@ -1476,25 +2140,46 @@ const updateBookingApprovalStatus = async (req, res) => {
                 data: updatePayload,
             });
 
-            // Send notifications to affected users asynchronously
-            const { notifyUser } = require("../utils/notifications");
+            // Send push notifications (FCM, socket, and DB) to affected users
             for (const b of bookingsToUpdate) {
                 if (b.user_id) {
-                    const title = validAction === "approve" ? "Booking Approved!" : "Booking Rejected";
+                    const title =
+                        validAction === "approve"
+                            ? "Booking Approved!"
+                            : "Booking Rejected";
                     const message =
                         validAction === "approve"
                             ? `Your booking (${b.booking_code}) at ${b.agency_name} has been approved.`
                             : `Your booking (${b.booking_code}) at ${b.agency_name} was rejected. Reason: ${rejectionReason.trim()}`;
-                    notifyUser(b.user_id, {
-                        type: validAction === "approve" ? "booking_approved" : "booking_rejected",
+                    await notifyUserWithFCM(b.user_id, {
+                        type:
+                            validAction === "approve"
+                                ? "booking_approved"
+                                : "booking_rejected",
                         title,
                         message,
                         data: {
-                            bookingId: b.booking_id,
+                            type:
+                                validAction === "approve"
+                                    ? "booking_approved"
+                                    : "booking_rejected",
+                            bookingId: b.booking_id.toString(),
                             bookingCode: b.booking_code,
-                            rejectionReason: validAction === "reject" ? rejectionReason.trim() : null,
+                            status:
+                                validAction === "approve"
+                                    ? "booked"
+                                    : "rejected",
+                            rejectionReason:
+                                validAction === "reject"
+                                    ? rejectionReason.trim()
+                                    : "",
                         },
-                    }).catch((err) => console.error("Error sending notification:", err));
+                    }).catch((err) =>
+                        console.error(
+                            "Error sending booking status push notification:",
+                            err
+                        )
+                    );
                 }
             }
         }
@@ -1507,8 +2192,11 @@ const updateBookingApprovalStatus = async (req, res) => {
         ).send(res);
     } catch (error) {
         console.error("Error in updateBookingApprovalStatus:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1518,6 +2206,8 @@ module.exports = {
     getUserBookings,
     getAgencyBookings,
     getBookingDetailsByCode,
+    getSlotAvailability,
+    checkSlotAvailability,
     checkIn,
     checkOut,
     cancelBooking,

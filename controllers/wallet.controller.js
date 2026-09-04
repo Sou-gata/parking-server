@@ -5,8 +5,11 @@ const { saveBase64File } = require("../utils/helperFunctions");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
-const { notifyUser } = require("../utils/notifications");
-const { approveAgencySettlement, rejectAgencySettlement } = require("../utils/commission");
+const { notifyUser, notifyUserWithFCM } = require("../utils/notifications");
+const {
+    approveAgencySettlement,
+    rejectAgencySettlement,
+} = require("../utils/commission");
 
 /**
  * Add money request (creates pending deposit transaction with screenshot and transaction number)
@@ -44,17 +47,28 @@ const addMoneyRequest = async (req, res) => {
 
         // Save Files from FormData (Multer) or Base64 Fallback
         let screenshotPath = req.file?.path
-            ? req.file.path
-                  .replace(/\\/g, "/")
-                  .replace(/^uploads\//, "")
+            ? req.file.path.replace(/\\/g, "/").replace(/^uploads\//, "")
             : screenshot
               ? saveBase64File(screenshot, "screenshots", "screenshot")
               : null;
 
+        const requesterUser = await prisma.user.findUnique({
+            where: { user_id: userId },
+            select: { full_name: true, username: true, wallet_balance: true },
+        });
+
+        const currentBal = requesterUser
+            ? parseFloat(requesterUser.wallet_balance || 0)
+            : 0;
+        const parsedAmt = parseFloat(amount);
+        const expectedBal = parseFloat((currentBal + parsedAmt).toFixed(2));
+
         const transaction = await prisma.walletTransaction.create({
             data: {
                 user_id: userId,
-                amount: parseFloat(amount),
+                amount: parsedAmt,
+                previous_balance: currentBal,
+                new_balance: expectedBal,
                 type: "deposit",
                 status: "pending",
                 transaction_number: transaction_number,
@@ -64,10 +78,7 @@ const addMoneyRequest = async (req, res) => {
 
         // notify all super_admins that a new wallet request is pending
         try {
-            const requester = await prisma.user.findUnique({
-                where: { user_id: userId },
-                select: { full_name: true, username: true },
-            });
+            const requester = requesterUser;
 
             const admins = await prisma.user.findMany({
                 where: { role: "super_admin" },
@@ -122,8 +133,11 @@ const addMoneyRequest = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in addMoneyRequest:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -152,7 +166,19 @@ const getWalletHistory = async (req, res) => {
                     return {
                         id: `agency_tx_${t.transaction_id}`,
                         type: "credit",
-                        amount: t.status === "approved" ? parseFloat(t.agency_share) : parseFloat((t.total_amount * (100 - parseFloat(t.commission_rate)) / 100).toFixed(2)),
+                        amount:
+                            t.status === "approved"
+                                ? parseFloat(t.agency_share)
+                                : parseFloat(
+                                      (
+                                          (t.total_amount *
+                                              (100 -
+                                                  parseFloat(
+                                                      t.commission_rate
+                                                  ))) /
+                                          100
+                                      ).toFixed(2)
+                                  ),
                         description: `Parking Revenue (${code}) - ${parseFloat(t.commission_rate)}% Admin Split`,
                         status: t.status || "approved",
                         date: t.created_at,
@@ -201,9 +227,20 @@ const getWalletHistory = async (req, res) => {
                 id: t.transaction_id.toString(),
                 type: t.type === "deposit" ? "credit" : "debit",
                 amount: parseFloat(t.amount),
+                previousBalance:
+                    t.previous_balance !== null &&
+                    t.previous_balance !== undefined
+                        ? parseFloat(t.previous_balance)
+                        : null,
+                newBalance:
+                    t.new_balance !== null && t.new_balance !== undefined
+                        ? parseFloat(t.new_balance)
+                        : null,
                 description,
                 status: t.status,
                 date: t.created_at,
+                transactionNumber: t.transaction_number || null,
+                rejectionReason: t.rejection_reason || null,
             };
         });
 
@@ -288,10 +325,7 @@ const getWalletBalance = async (req, res) => {
             new ApiResponse(
                 200,
                 {
-                    walletBalance: Math.max(
-                        0,
-                        parseFloat(user.wallet_balance || 0)
-                    ),
+                    walletBalance: parseFloat(user.wallet_balance || 0),
                     reservedBalance: parseFloat(reservedBalance.toFixed(2)),
                 },
                 "Wallet balance fetched successfully"
@@ -299,8 +333,11 @@ const getWalletBalance = async (req, res) => {
         );
     } catch (error) {
         console.error("Error in getWalletBalance:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -359,8 +396,11 @@ const getWalletQr = async (req, res) => {
         );
     } catch (error) {
         console.error("Error in getWalletQr:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -392,6 +432,7 @@ const getPendingWalletRequests = async (req, res) => {
                     status: reqItem.status,
                     transactionNumber: reqItem.transaction_number || "",
                     screenshotPath: reqItem.screenshot_path || null,
+                    rejectionReason: reqItem.rejection_reason || null, // ✅ Add this
                     createdAt: reqItem.created_at,
                 };
             })
@@ -435,10 +476,21 @@ const getWalletTransactionsLog = async (req, res) => {
                     username: user?.username || "Unknown",
                     email: user?.email || "Unknown",
                     amount: parseFloat(reqItem.amount),
+                    previousBalance:
+                        reqItem.previous_balance !== null &&
+                        reqItem.previous_balance !== undefined
+                            ? parseFloat(reqItem.previous_balance)
+                            : null,
+                    newBalance:
+                        reqItem.new_balance !== null &&
+                        reqItem.new_balance !== undefined
+                            ? parseFloat(reqItem.new_balance)
+                            : null,
                     type: reqItem.type,
                     status: reqItem.status,
                     transactionNumber: reqItem.transaction_number || "",
                     screenshotPath: reqItem.screenshot_path || null,
+                    rejectionReason: reqItem.rejection_reason || null,
                     createdAt: reqItem.created_at,
                     decidedAt: reqItem.updated_at,
                 };
@@ -486,12 +538,8 @@ const approveWalletRequest = async (req, res) => {
             );
         }
 
+        let updatedUserBalance = null;
         await prisma.$transaction(async (tx) => {
-            await tx.walletTransaction.update({
-                where: { transaction_id: parsedTxId },
-                data: { status: "approved" },
-            });
-
             if (transaction.type === "deposit") {
                 const user = await tx.user.findUnique({
                     where: { user_id: transaction.user_id },
@@ -505,17 +553,64 @@ const approveWalletRequest = async (req, res) => {
                 }
 
                 const currentBalance = parseFloat(user.wallet_balance || 0);
-                const newBalance =
-                    currentBalance + parseFloat(transaction.amount);
+                const newBalance = parseFloat(
+                    (currentBalance + parseFloat(transaction.amount)).toFixed(2)
+                );
+                updatedUserBalance = newBalance;
+
+                await tx.walletTransaction.update({
+                    where: { transaction_id: parsedTxId },
+                    data: {
+                        status: "approved",
+                        previous_balance: currentBalance,
+                        new_balance: newBalance,
+                    },
+                });
 
                 await tx.user.update({
                     where: { user_id: transaction.user_id },
                     data: { wallet_balance: newBalance },
                 });
+            } else {
+                await tx.walletTransaction.update({
+                    where: { transaction_id: parsedTxId },
+                    data: { status: "approved" },
+                });
             }
         });
 
-        // notify other super_admins that this request has been handled
+        // 1. Notify the user via Firebase Cloud Messaging push notification (and socket/DB)
+        try {
+            const formattedAmount = parseFloat(transaction.amount).toFixed(2);
+            const balanceText =
+                updatedUserBalance !== null
+                    ? ` Your updated wallet balance is ₹${updatedUserBalance.toFixed(2)}.`
+                    : "";
+            const userNotification = {
+                type: "wallet_request_approved",
+                title: "Wallet Balance Added",
+                message: `Your wallet top-up request of ₹${formattedAmount} has been approved.${balanceText}`,
+                data: {
+                    type: "wallet_request_approved",
+                    transactionId: transaction.transaction_id.toString(),
+                    amount: formattedAmount,
+                    newBalance:
+                        updatedUserBalance !== null
+                            ? updatedUserBalance.toFixed(2)
+                            : "",
+                    status: "approved",
+                },
+            };
+
+            await notifyUserWithFCM(transaction.user_id, userNotification);
+        } catch (userNotifyErr) {
+            console.error(
+                "Error sending wallet approval notification to user:",
+                userNotifyErr
+            );
+        }
+
+        // 2. Notify other super_admins that this request has been handled
         try {
             const admins = await prisma.user.findMany({
                 where: { role: "super_admin" },
@@ -562,8 +657,11 @@ const approveWalletRequest = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in approveWalletRequest:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -574,6 +672,8 @@ const approveWalletRequest = async (req, res) => {
 const rejectWalletRequest = async (req, res) => {
     try {
         const { transactionId } = req.params;
+        const { rejection_reason } = req.body;
+
         const parsedTxId = parseInt(transactionId);
         if (isNaN(parsedTxId)) {
             throw new ApiError(400, "Invalid transaction ID");
@@ -594,12 +694,45 @@ const rejectWalletRequest = async (req, res) => {
             );
         }
 
+        // Validate rejection reason
+        const reason = (rejection_reason || "").trim();
+        if (!reason) {
+            throw new ApiError(400, "A rejection reason is mandatory.");
+        }
+
         await prisma.walletTransaction.update({
             where: { transaction_id: parsedTxId },
-            data: { status: "rejected" },
+            data: {
+                status: "rejected",
+                rejection_reason: reason,
+            },
         });
 
-        // notify other super_admins that this request has been handled
+        // 1. Notify the user via Firebase Cloud Messaging push notification
+        try {
+            const formattedAmount = parseFloat(transaction.amount).toFixed(2);
+            const userNotification = {
+                type: "wallet_request_rejected",
+                title: "Wallet Top-up Rejected",
+                message: `Your wallet top-up request for ₹${formattedAmount} was rejected. Reason: ${reason}`,
+                data: {
+                    type: "wallet_request_rejected",
+                    transactionId: transaction.transaction_id.toString(),
+                    amount: formattedAmount,
+                    status: "rejected",
+                    reason: reason,
+                },
+            };
+
+            await notifyUserWithFCM(transaction.user_id, userNotification);
+        } catch (userNotifyErr) {
+            console.error(
+                "Error sending wallet rejection notification to user:",
+                userNotifyErr
+            );
+        }
+
+        // 2. Notify other super_admins
         try {
             const admins = await prisma.user.findMany({
                 where: { role: "super_admin" },
@@ -609,21 +742,15 @@ const rejectWalletRequest = async (req, res) => {
             const notification = {
                 type: "wallet_request_rejected",
                 title: "Wallet Request Rejected",
-                message: `Transaction #${transaction.transaction_id} (₹${parseFloat(transaction.amount).toFixed(2)}) was rejected by ${req.user.username || req.user.id}.`,
+                message: `Transaction #${transaction.transaction_id} (₹${parseFloat(transaction.amount).toFixed(2)}) was rejected by ${req.user.username || req.user.id}. Reason: ${reason}`,
                 data: {
                     transactionId: transaction.transaction_id,
                     userId: transaction.user_id,
                     amount: parseFloat(transaction.amount),
                     decidedBy: req.user.id,
+                    reason: reason,
                 },
             };
-
-            // admins
-            //     // .filter((admin) => admin.user_id !== req.user.id)
-            //     .forEach((admin) => {
-            //         // sendNotificationToUser(admin.user_id, notification);
-            //         await notifyUser(admin.user_id, notification);
-            //     });
 
             for (const admin of admins) {
                 await notifyUser(admin.user_id, notification);
@@ -635,19 +762,24 @@ const rejectWalletRequest = async (req, res) => {
             );
         }
 
-        return res
-            .status(200)
-            .json(
-                new ApiResponse(
-                    200,
-                    null,
-                    "Wallet request rejected successfully."
-                )
-            );
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    transactionId: transaction.transaction_id,
+                    status: "rejected",
+                    rejection_reason: reason,
+                },
+                "Wallet request rejected successfully."
+            )
+        );
     } catch (error) {
         console.error("Error in rejectWalletRequest:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -702,8 +834,11 @@ const updateWalletConfig = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in updateWalletConfig:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -785,8 +920,11 @@ const requestAgencyWithdrawal = async (req, res) => {
         );
     } catch (error) {
         console.error("Error in requestAgencyWithdrawal:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -901,26 +1039,14 @@ const approveAgencyWithdrawalRequest = async (req, res) => {
 
         // Save Files from FormData (Multer) or Base64 Fallback
         let screenshotPath = req.file?.path
-            ? req.file.path
-                  .replace(/\\/g, "/")
-                  .replace(/^uploads\//, "")
+            ? req.file.path.replace(/\\/g, "/").replace(/^uploads\//, "")
             : screenshot && screenshot.trim() !== ""
-              ? saveBase64File(
-                    screenshot,
-                    "withdrawal_screenshots",
-                    "proof"
-                )
+              ? saveBase64File(screenshot, "withdrawal_screenshots", "proof")
               : null;
 
         await prisma.$transaction(async (tx) => {
-            await tx.walletTransaction.update({
-                where: { transaction_id: parsedTxId },
-                data: {
-                    status: "approved",
-                    transaction_number: resolvedTxNum,
-                    screenshot_path: screenshotPath,
-                },
-            });
+            let prevBal = null;
+            let nextBal = null;
 
             if (transaction.agency_id) {
                 const org = await tx.orgUser.findUnique({
@@ -934,16 +1060,43 @@ const approveAgencyWithdrawalRequest = async (req, res) => {
                     );
                 }
 
-                const currentBalance = parseFloat(org.wallet_balance || 0);
-                const newBalance = parseFloat(
-                    (currentBalance - parseFloat(transaction.amount)).toFixed(2)
+                prevBal = parseFloat(org.wallet_balance || 0);
+                nextBal = parseFloat(
+                    (prevBal - parseFloat(transaction.amount)).toFixed(2)
                 );
 
                 await tx.orgUser.update({
                     where: { org_id: transaction.agency_id },
-                    data: { wallet_balance: Math.max(0, newBalance) },
+                    data: { wallet_balance: Math.max(0, nextBal) },
                 });
+            } else if (transaction.user_id) {
+                const user = await tx.user.findUnique({
+                    where: { user_id: transaction.user_id },
+                });
+
+                if (user) {
+                    prevBal = parseFloat(user.wallet_balance || 0);
+                    nextBal = parseFloat(
+                        (prevBal - parseFloat(transaction.amount)).toFixed(2)
+                    );
+
+                    await tx.user.update({
+                        where: { user_id: transaction.user_id },
+                        data: { wallet_balance: Math.max(0, nextBal) },
+                    });
+                }
             }
+
+            await tx.walletTransaction.update({
+                where: { transaction_id: parsedTxId },
+                data: {
+                    status: "approved",
+                    transaction_number: resolvedTxNum,
+                    screenshot_path: screenshotPath,
+                    previous_balance: prevBal,
+                    new_balance: nextBal,
+                },
+            });
         });
 
         return res
@@ -957,8 +1110,11 @@ const approveAgencyWithdrawalRequest = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in approveAgencyWithdrawalRequest:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1023,8 +1179,11 @@ const rejectAgencyWithdrawalRequest = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in rejectAgencyWithdrawalRequest:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1071,8 +1230,11 @@ const getAgencyWithdrawalHistory = async (req, res) => {
             );
     } catch (error) {
         console.error("Error in getAgencyWithdrawalHistory:", error);
-        if (error instanceof ApiError)
-            return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1123,7 +1285,9 @@ const getAdminTransactionHistory = async (req, res) => {
                     customerName: booking?.user_name || "Customer",
                     bookingCode: booking?.booking_code || "N/A",
                     totalAmount: parseFloat(t.total_amount),
-                    approvedAmount: t.approved_amount ? parseFloat(t.approved_amount) : parseFloat(t.total_amount),
+                    approvedAmount: t.approved_amount
+                        ? parseFloat(t.approved_amount)
+                        : parseFloat(t.total_amount),
                     commissionRate: parseFloat(t.commission_rate),
                     adminShare: parseFloat(t.admin_share),
                     agencyShare: parseFloat(t.agency_share),
@@ -1164,6 +1328,15 @@ const getAdminTransactionHistory = async (req, res) => {
                     userId: t.user_id || null,
                     entityName,
                     amount: parseFloat(t.amount),
+                    previousBalance:
+                        t.previous_balance !== null &&
+                        t.previous_balance !== undefined
+                            ? parseFloat(t.previous_balance)
+                            : null,
+                    newBalance:
+                        t.new_balance !== null && t.new_balance !== undefined
+                            ? parseFloat(t.new_balance)
+                            : null,
                     type: t.type,
                     status: t.status,
                     transactionNumber: t.transaction_number || null,
@@ -1228,15 +1401,22 @@ const getPendingAgencySettlements = async (req, res) => {
                     ? parseFloat(agency.commission_percentage)
                     : parseFloat(st.commission_rate || 0);
 
-                const estimatedAdminShare = parseFloat(((totalAmount * commissionRate) / 100).toFixed(2));
-                const estimatedAgencyShare = parseFloat((totalAmount - estimatedAdminShare).toFixed(2));
+                const estimatedAdminShare = parseFloat(
+                    ((totalAmount * commissionRate) / 100).toFixed(2)
+                );
+                const estimatedAgencyShare = parseFloat(
+                    (totalAmount - estimatedAdminShare).toFixed(2)
+                );
 
                 return {
                     id: st.transaction_id,
                     bookingId: st.booking_id,
                     bookingCode: booking?.booking_code || "N/A",
                     agencyId: st.agency_id,
-                    agencyName: agency?.org_name || booking?.agency_name || "Unknown Agency",
+                    agencyName:
+                        agency?.org_name ||
+                        booking?.agency_name ||
+                        "Unknown Agency",
                     customerName: booking?.user_name || "Customer",
                     totalAmount,
                     commissionRate,
@@ -1248,13 +1428,15 @@ const getPendingAgencySettlements = async (req, res) => {
             })
         );
 
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                formatted,
-                "Pending agency settlements fetched successfully"
-            )
-        );
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    formatted,
+                    "Pending agency settlements fetched successfully"
+                )
+            );
     } catch (error) {
         console.error("Error in getPendingAgencySettlements:", error);
         return res.status(500).json(new ApiError(500, error.message));
@@ -1278,16 +1460,22 @@ const approveAgencySettlementHandler = async (req, res) => {
             });
         });
 
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                updatedTx,
-                "Agency settlement approved successfully"
-            )
-        );
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    updatedTx,
+                    "Agency settlement approved successfully"
+                )
+            );
     } catch (error) {
         console.error("Error in approveAgencySettlementHandler:", error);
-        if (error instanceof ApiError) return res.status(error.statusCode).json(error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1309,16 +1497,192 @@ const rejectAgencySettlementHandler = async (req, res) => {
             });
         });
 
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    updatedTx,
+                    "Agency settlement rejected successfully"
+                )
+            );
+    } catch (error) {
+        console.error("Error in rejectAgencySettlementHandler:", error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+const getAgencyWalletSummary = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const parsedAgencyId = parseInt(id);
+        if (isNaN(parsedAgencyId)) {
+            throw new ApiError(400, "Invalid agency ID");
+        }
+
+        const agency = await prisma.orgUser.findUnique({
+            where: { org_id: parsedAgencyId },
+            select: { wallet_balance: true, org_name: true },
+        });
+
+        if (!agency) {
+            throw new ApiError(404, "Agency not found");
+        }
+
+        const agencyTransactions = await prisma.agencyTransaction.findMany({
+            where: { agency_id: parsedAgencyId },
+            orderBy: { created_at: "desc" },
+        });
+
+        const walletTransactions = await prisma.walletTransaction.findMany({
+            where: { agency_id: parsedAgencyId, type: "withdrawal" },
+            orderBy: { created_at: "desc" },
+        });
+
+        const formattedRevenue = await Promise.all(
+            agencyTransactions.map(async (t) => {
+                const booking = await prisma.booking.findUnique({
+                    where: { booking_id: t.booking_id },
+                    select: { booking_code: true, user_name: true },
+                });
+                return {
+                    id: `agency_tx_${t.transaction_id}`,
+                    category: "revenue_split",
+                    type: "credit",
+                    bookingCode: booking?.booking_code || "N/A",
+                    customerName: booking?.user_name || "Customer",
+                    totalAmount: parseFloat(t.total_amount),
+                    commissionRate: parseFloat(t.commission_rate),
+                    adminShare: parseFloat(t.admin_share),
+                    amount: parseFloat(t.agency_share),
+                    status: "approved",
+                    date: t.created_at,
+                };
+            })
+        );
+
+        const formattedWithdrawals = walletTransactions.map((t) => ({
+            id: `wallet_tx_${t.transaction_id}`,
+            category: "withdrawal",
+            type: "debit",
+            amount: parseFloat(t.amount),
+            status: t.status,
+            transactionNumber: t.transaction_number || null,
+            screenshotPath: t.screenshot_path || null,
+            rejectionReason: t.rejection_reason || null,
+            date: t.created_at,
+        }));
+
+        const combined = [...formattedRevenue, ...formattedWithdrawals].sort(
+            (a, b) => new Date(b.date) - new Date(a.date)
+        );
+
         return res.status(200).json(
             new ApiResponse(
                 200,
-                updatedTx,
-                "Agency settlement rejected successfully"
+                {
+                    agencyId: parsedAgencyId,
+                    agencyName: agency.org_name,
+                    walletBalance: Math.max(
+                        0,
+                        parseFloat(agency.wallet_balance || 0)
+                    ),
+                    transactions: combined,
+                },
+                "Agency wallet summary fetched successfully"
             )
         );
     } catch (error) {
-        console.error("Error in rejectAgencySettlementHandler:", error);
-        if (error instanceof ApiError) return res.status(error.statusCode).json(error);
+        console.error("Error in getAgencyWalletSummary:", error);
+        if (error instanceof ApiError) {
+            return res
+                .status(error.statusCode)
+                .json({ ...error, message: error.message });
+        }
+        return res.status(500).json(new ApiError(500, error.message));
+    }
+};
+
+const getAgencySettlementsAuditTrail = async (req, res) => {
+    try {
+        const completedSettlements = await prisma.agencyTransaction.findMany({
+            where: { status: { in: ["approved", "rejected"] } },
+            orderBy: { created_at: "desc" },
+        });
+
+        const formatted = await Promise.all(
+            completedSettlements.map(async (st) => {
+                const booking = await prisma.booking.findUnique({
+                    where: { booking_id: st.booking_id },
+                    select: {
+                        booking_code: true,
+                        user_name: true,
+                        agency_name: true,
+                    },
+                });
+                const agency = await prisma.orgUser.findUnique({
+                    where: { org_id: st.agency_id },
+                    select: { org_name: true },
+                });
+
+                // approved_by stores the acting admin's user_id. NOTE: this
+                // schema has no separate "admin" model — super_admin and
+                // authority_admin are assumed to be rows in the `User`
+                // table (role-based), consistent with the rest of this app.
+                // If admins actually live somewhere else, point this lookup
+                // there instead.
+                let approvedByName = null;
+                if (st.approved_by) {
+                    const approver = await prisma.user.findUnique({
+                        where: { user_id: st.approved_by },
+                        select: { full_name: true },
+                    });
+                    approvedByName = approver?.full_name || null;
+                }
+
+                return {
+                    id: st.transaction_id,
+                    bookingId: st.booking_id,
+                    bookingCode: booking?.booking_code || "N/A",
+                    agencyId: st.agency_id,
+                    agencyName:
+                        agency?.org_name ||
+                        booking?.agency_name ||
+                        "Unknown Agency",
+                    customerName: booking?.user_name || "Customer",
+                    totalAmount: parseFloat(st.total_amount),
+                    approvedAmount:
+                        st.approved_amount !== null &&
+                        st.approved_amount !== undefined
+                            ? parseFloat(st.approved_amount)
+                            : null,
+                    commissionRate: parseFloat(st.commission_rate),
+                    adminShare: parseFloat(st.admin_share),
+                    agencyShare: parseFloat(st.agency_share),
+                    status: st.status,
+                    rejectionReason: st.rejection_reason,
+                    approvedBy: approvedByName,
+                    approvedAt: st.approved_at,
+                    createdAt: st.created_at,
+                };
+            })
+        );
+
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    formatted,
+                    "Agency settlements audit trail fetched successfully"
+                )
+            );
+    } catch (error) {
+        console.error("Error in getAgencySettlementsAuditTrail:", error);
         return res.status(500).json(new ApiError(500, error.message));
     }
 };
@@ -1343,4 +1707,6 @@ module.exports = {
     getPendingAgencySettlements,
     approveAgencySettlementHandler,
     rejectAgencySettlementHandler,
+    getAgencyWalletSummary,
+    getAgencySettlementsAuditTrail,
 };

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Health APIs - Documentation</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <sidebar>
+        <div class="brand-header">
+            <a href="index.html" class="brand-title">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 3A2 2 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+                Parking Server API
+            </a>
+            <div class="brand-subtitle">REST API Reference Manual</div>
+        </div>
+        <div class="nav-sections">
+            <div class="nav-group-title">Overview</div>
+            <a href="index.html" class="nav-item">
+                <span>🏠 Documentation Hub</span>
+                <span class="count-badge">97</span>
+            </a>
+
+            <div class="nav-group-title">Route File Modules</div>
+            <a href="user.html" class="nav-item">
+                <span class="route-file-tag">user.routes.js</span>
+                <span class="count-badge">20</span>
+            </a>
+            <a href="agency.html" class="nav-item">
+                <span class="route-file-tag">agency.routes.js</span>
+                <span class="count-badge">17</span>
+            </a>
+            <a href="booking.html" class="nav-item">
+                <span class="route-file-tag">booking.routes.js</span>
+                <span class="count-badge">12</span>
+            </a>
+            <a href="wallet.html" class="nav-item">
+                <span class="route-file-tag">wallet.routes.js</span>
+                <span class="count-badge">20</span>
+            </a>
+            <a href="complaint.html" class="nav-item">
+                <span class="route-file-tag">complaint.routes.js</span>
+                <span class="count-badge">8</span>
+            </a>
+            <a href="rating.html" class="nav-item">
+                <span class="route-file-tag">rating.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="notification.html" class="nav-item">
+                <span class="route-file-tag">notification.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="working-hours.html" class="nav-item">
+                <span class="route-file-tag">workingHours.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="config.html" class="nav-item">
+                <span class="route-file-tag">config.routes.js</span>
+                <span class="count-badge">2</span>
+            </a>
+            <a href="dashboard.html" class="nav-item">
+                <span class="route-file-tag">dashboard.routes.js</span>
+                <span class="count-badge">2</span>
+            </a>
+            <a href="system.html" class="nav-item active">
+                <span class="route-file-tag">system.routes</span>
+                <span class="count-badge">1</span>
+            </a>
+        </div>
+    </sidebar>
+
+    <!-- Main Content Area -->
+    <main>
+        <div class="top-header">
+            <div class="search-container">
+                <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" id="searchInput" class="search-input" placeholder="Search route path, description, params, or method..." onkeyup="applyFilters()">
+            </div>
+            <div class="method-filters">
+                <button class="filter-btn active" onclick="filterMethod('ALL', this)">ALL</button>
+                <button class="filter-btn" onclick="filterMethod('GET', this)">GET</button>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="section-title-bar">
+                <div class="page-title">
+                    <span>⚡ System Health APIs</span>
+                </div>
+                <span class="file-badge-large">index.js</span>
+            </div>
+
+            <div id="endpointsList">
+
+                <div class="endpoint-card" data-method="GET" data-text="test system health ping status express server check">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/test</span>
+                            <div class="badges-container"><span class="badge-public">Public</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/test')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Public ping health check route to verify Express server status, database connection, and API uptime.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔑 Headers Required</div>
+                                <pre>None (Public)</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": {
+    "status": "online",
+    "uptime": 12840,
+    "timestamp": "2026-08-14T00:00:00.000Z"
+  },
+  "message": "Server is running smoothly",
+  "success": true
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Notification Element -->
+    <div id="toast" class="toast">Path copied to clipboard!</div>
+
+    <script>
+        let currentMethod = 'ALL';
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            setTimeout(() => { toast.classList.remove('show'); }, 2000);
+        }
+
+        function copyPath(path) {
+            navigator.clipboard.writeText(path).then(() => {
+                showToast('Copied: ' + path);
+            }).catch(() => {
+                prompt('Copy endpoint path:', path);
+            });
+        }
+
+        function filterMethod(method, btn) {
+            currentMethod = method;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.endpoint-card');
+
+            cards.forEach(card => {
+                const cardMethod = card.getAttribute('data-method');
+                const text = card.getAttribute('data-text').toLowerCase();
+                const path = card.querySelector('.endpoint-path').innerText.toLowerCase();
+                const desc = card.querySelector('.api-description').innerText.toLowerCase();
+
+                const matchesMethod = (currentMethod === 'ALL' || cardMethod === currentMethod);
+                const matchesSearch = (!query || text.includes(query) || path.includes(query) || desc.includes(query));
+
+                if (matchesMethod && matchesSearch) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>

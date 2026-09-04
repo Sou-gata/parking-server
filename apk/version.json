@@ -1,0 +1,7 @@
+{
+    "versionName": "1.0.2",
+    "versionCode": 3,
+    "releaseNotes": "Initial release of ParkVerse with real-time parking spot reservations, navigation, and digital wallet integration.",
+    "downloadUrl": "/apk/app-release.apk",
+    "forceUpdate": false
+}

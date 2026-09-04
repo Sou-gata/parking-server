@@ -27,6 +27,7 @@ const distributePaymentCommission = async (
     // Fetch agency to get commission rate
     const agency = await tx.orgUser.findUnique({
         where: { org_id: parsedAgencyId },
+        select: { org_id: true, org_name: true, commission_percentage: true },
     });
 
     const commissionRate = agency?.commission_percentage
@@ -52,6 +53,8 @@ const distributePaymentCommission = async (
             data: {
                 user_id: superAdmin.user_id,
                 amount: totalAmount,
+                previous_balance: currentAdminBalance,
+                new_balance: newAdminBalance,
                 type: "deposit",
                 status: "approved",
                 transaction_number: `SUPERADMIN-COLLECT-${bookingCode}`,
@@ -130,6 +133,7 @@ const approveAgencySettlement = async (tx, { transactionId, customAmount, adminI
 
     const agency = await tx.orgUser.findUnique({
         where: { org_id: agencyTx.agency_id },
+        select: { org_id: true, org_name: true, commission_percentage: true, wallet_balance: true },
     });
 
     if (!agency) {
@@ -163,6 +167,8 @@ const approveAgencySettlement = async (tx, { transactionId, customAmount, adminI
             data: {
                 user_id: superAdmin.user_id,
                 amount: agencyShare,
+                previous_balance: currentAdminBal,
+                new_balance: newAdminBal,
                 type: "withdrawal",
                 status: "approved",
                 transaction_number: `AGENCY-PAYOUT-${agencyTx.transaction_id}`,
@@ -185,6 +191,8 @@ const approveAgencySettlement = async (tx, { transactionId, customAmount, adminI
             user_id: 0,
             agency_id: agencyTx.agency_id,
             amount: agencyShare,
+            previous_balance: currentAgencyBal,
+            new_balance: newAgencyBal,
             type: "deposit",
             status: "approved",
             transaction_number: `REVENUE-SETTLED-${agencyTx.transaction_id}`,

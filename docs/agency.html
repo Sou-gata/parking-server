@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agency Management APIs - Documentation</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <sidebar>
+        <div class="brand-header">
+            <a href="index.html" class="brand-title">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 3A2 2 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+                Parking Server API
+            </a>
+            <div class="brand-subtitle">REST API Reference Manual</div>
+        </div>
+        <div class="nav-sections">
+            <div class="nav-group-title">Overview</div>
+            <a href="index.html" class="nav-item">
+                <span>🏠 Documentation Hub</span>
+                <span class="count-badge">97</span>
+            </a>
+
+            <div class="nav-group-title">Route File Modules</div>
+            <a href="user.html" class="nav-item">
+                <span class="route-file-tag">user.routes.js</span>
+                <span class="count-badge">20</span>
+            </a>
+            <a href="agency.html" class="nav-item active">
+                <span class="route-file-tag">agency.routes.js</span>
+                <span class="count-badge">17</span>
+            </a>
+            <a href="booking.html" class="nav-item">
+                <span class="route-file-tag">booking.routes.js</span>
+                <span class="count-badge">12</span>
+            </a>
+            <a href="wallet.html" class="nav-item">
+                <span class="route-file-tag">wallet.routes.js</span>
+                <span class="count-badge">20</span>
+            </a>
+            <a href="complaint.html" class="nav-item">
+                <span class="route-file-tag">complaint.routes.js</span>
+                <span class="count-badge">8</span>
+            </a>
+            <a href="rating.html" class="nav-item">
+                <span class="route-file-tag">rating.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="notification.html" class="nav-item">
+                <span class="route-file-tag">notification.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="working-hours.html" class="nav-item">
+                <span class="route-file-tag">workingHours.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="config.html" class="nav-item">
+                <span class="route-file-tag">config.routes.js</span>
+                <span class="count-badge">2</span>
+            </a>
+            <a href="dashboard.html" class="nav-item">
+                <span class="route-file-tag">dashboard.routes.js</span>
+                <span class="count-badge">2</span>
+            </a>
+            <a href="system.html" class="nav-item">
+                <span class="route-file-tag">system.routes</span>
+                <span class="count-badge">1</span>
+            </a>
+        </div>
+    </sidebar>
+
+    <!-- Main Content Area -->
+    <main>
+        <div class="top-header">
+            <div class="search-container">
+                <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" id="searchInput" class="search-input" placeholder="Search route path, description, params, or method..." onkeyup="applyFilters()">
+            </div>
+            <div class="method-filters">
+                <button class="filter-btn active" onclick="filterMethod('ALL', this)">ALL</button>
+                <button class="filter-btn" onclick="filterMethod('GET', this)">GET</button>
+                <button class="filter-btn" onclick="filterMethod('POST', this)">POST</button>
+                <button class="filter-btn" onclick="filterMethod('PUT', this)">PUT</button>
+                <button class="filter-btn" onclick="filterMethod('PATCH', this)">PATCH</button>
+                <button class="filter-btn" onclick="filterMethod('DELETE', this)">DELETE</button>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="section-title-bar">
+                <div class="page-title">
+                    <span>🏢 Agency Management APIs</span>
+                </div>
+                <span class="file-badge-large">agency.routes.js</span>
+            </div>
+
+            <div id="endpointsList">
+
+                <div class="endpoint-card" data-method="GET" data-text="public media photos videos agency gallery">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/media</span>
+                            <div class="badges-container"><span class="badge-public">Public</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/media')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches approved public media images and videos for a specific parking agency.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📌 Path Parameters</div>
+                                <pre>id: string (e.g. agency_881)</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": [
+    { "media_id": "med_101", "file_path": "uploads/img_1.jpg", "media_type": "image", "is_approved": true }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="all media agency inclusive pending rejected">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/all-media</span>
+                            <div class="badges-container"><span class="badge-jwt">verifyJWT</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/all-media')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches all uploaded media items for an agency including pending and rejected status files.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔑 Headers Required</div>
+                                <pre>Authorization: Bearer &lt;JWT_TOKEN&gt;</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": [
+    { "media_id": "med_102", "file_path": "uploads/img_2.jpg", "status": "pending" }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="list agencies public parking spots location radius search">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/agencies</span>
+                            <div class="badges-container"><span class="badge-public">Public</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Lists active parking agencies with support for geolocation radius filtering.<br>
+                            Filter by latitude, longitude, distance radius, keyword search, and vehicle type.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔍 Query Parameters</div>
+                                <pre>latitude=22.5726&longitude=88.3639&radius=5&vehicle_type=car&search=metro</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": [
+    {
+      "agency_id": "agency_881",
+      "agency_name": "Metro Parking Hub",
+      "latitude": 22.5726,
+      "longitude": 88.3639,
+      "car_rate": 40,
+      "available_car_slots": 18
+    }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="route geometry calculate distance navigation origin destination">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/agencies/route</span>
+                            <div class="badges-container"><span class="badge-public">Public</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/route')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Calculates driving route geometry and estimated transit distance to parking facility.<br>
+                            Accepts origin coordinates (user location) and destination coordinates (agency location).
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔍 Query Parameters</div>
+                                <pre>origin_lat=22.5726&origin_lng=88.3639&dest_lat=22.5800&dest_lng=88.3700</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": {
+    "distance_km": 1.4,
+    "duration_mins": 5,
+    "polyline": "a~l~Fcy}sO..."
+  }
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="get agency details single parking lot info">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id</span>
+                            <div class="badges-container"><span class="badge-public">Public</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches comprehensive specifications of a specific parking agency including pricing, capacities, and working hours.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📌 Path Parameters</div>
+                                <pre>id: string (e.g. agency_881)</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": {
+    "agency_id": "agency_881",
+    "name": "Metro Parking Hub",
+    "car_rate": 40,
+    "two_wheeler_rate": 20,
+    "car_capacity": 50,
+    "opening_time": "08:00",
+    "closing_time": "22:00",
+    "parking_length": 15.5,
+    "parking_width": 8.2,
+    "parking_height": 10.0,
+    "dimension_unit": "meters"
+  }
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="update agency details profile address phone">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Updates agency profile information such as facility name, address, coordinates, and contact phone number.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "name": "Metro Parking Hub Prime",
+  "address": "100 Park Street, Kolkata",
+  "latitude": 22.5726,
+  "longitude": 88.3639,
+  "contact_phone": "9876500112"
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "agency_id": "agency_881", "name": "Metro Parking Hub Prime" },
+  "message": "Agency details updated successfully"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="update agency capacities vehicle slots car two wheeler">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/capacities</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/capacities')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Updates total slot capacities for various vehicle types supported at the agency.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "two_wheeler_capacity": 40,
+  "car_capacity": 60,
+  "suv_capacity": 15,
+  "ev_capacity": 10
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "car_capacity": 60, "two_wheeler_capacity": 40 },
+  "message": "Agency capacities updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="update agency rates price hourly rates agency_admin super_admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/rates</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/rates')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Updates hourly billing rates across vehicle categories for a specific agency.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "two_wheeler_rate": 20,
+  "car_rate": 40,
+  "suv_rate": 50,
+  "ev_rate": 60
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "rates_updated": true },
+  "message": "Agency rates updated successfully"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="cancellation policy fee percentage refund window super admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/cancellation-policy</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/cancellation-policy')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Configures agency-specific cancellation fee percentage and free cancellation time window.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "cancellation_fee_percentage": 10,
+  "free_cancellation_window_mins": 15
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "cancellation_fee_percentage": 10 },
+  "message": "Cancellation policy updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="commission rate agency percentage super admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/commission</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/commission')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Sets platform commission percentage rate collected from agency bookings.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "commission_rate_percentage": 12.5
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "commission_rate_percentage": 12.5 },
+  "message": "Commission rate updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PATCH" data-text="approval setting auto approve booking toggle super admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PATCH">PATCH</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/approval-setting</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/approval-setting')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Toggles whether new customer bookings require manual operator confirmation or auto-approval.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "auto_approve_bookings": true
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "auto_approve_bookings": true },
+  "message": "Approval setting updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="POST" data-text="add agency media photo upload multipart">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-POST">POST</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/media</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/media')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Uploads a new facility photo or video for an agency gallery.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Format (Multipart FormData)</div>
+                                <pre>{
+  "media": "&lt;File Attachment&gt;",
+  "caption": "Front Parking Gate Overview"
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (201 Created)</div>
+                                <pre>{
+  "statusCode": 201,
+  "data": { "media_id": "med_501", "file_path": "uploads/gate.jpg" },
+  "message": "Media uploaded successfully"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="update agency media edit replace image">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/media/:mediaId</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/media/{mediaId}')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Replaces an existing media file or updates caption text.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Format (Multipart FormData)</div>
+                                <pre>{
+  "media": "&lt;File Attachment&gt;",
+  "caption": "Updated Gate Entry View"
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "media_id": "med_501", "caption": "Updated Gate Entry View" },
+  "message": "Media updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="DELETE" data-text="delete agency media remove photo">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-DELETE">DELETE</span>
+                            <span class="endpoint-path">/api/v1/agencies/media/:mediaId</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/media/{mediaId}')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Deletes an uploaded media item from the agency's gallery.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📌 Path Parameters</div>
+                                <pre>mediaId: string (e.g. med_501)</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "message": "Media deleted successfully"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PATCH" data-text="media status approve reject super admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PATCH">PATCH</span>
+                            <span class="endpoint-path">/api/v1/agencies/media/:mediaId/status</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/media/{mediaId}/status')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Super admin endpoint to approve or reject uploaded agency media items.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "status": "approved"
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "media_id": "med_501", "status": "approved" },
+  "message": "Media status updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="update agency status suspend activate super admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/status</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/status')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Updates operating status of an agency (active, suspended, closed).
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "status": "suspended",
+  "reason": "Temporary audit compliance review"
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "agency_id": "agency_881", "status": "suspended" },
+  "message": "Agency status updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="agency status history audit log super admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/agencies/:id/status-history</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/agencies/{id}/status-history')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches audit trail of past agency status modifications and administrative actions.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📌 Path Parameters</div>
+                                <pre>id: string (e.g. agency_881)</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": [
+    { "history_id": "hist_202", "previous_status": "active", "new_status": "suspended", "reason": "Audit review", "created_at": "2026-02-12T10:00:00Z" }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Notification Element -->
+    <div id="toast" class="toast">Path copied to clipboard!</div>
+
+    <script>
+        let currentMethod = 'ALL';
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            setTimeout(() => { toast.classList.remove('show'); }, 2000);
+        }
+
+        function copyPath(path) {
+            navigator.clipboard.writeText(path).then(() => {
+                showToast('Copied: ' + path);
+            }).catch(() => {
+                prompt('Copy endpoint path:', path);
+            });
+        }
+
+        function filterMethod(method, btn) {
+            currentMethod = method;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.endpoint-card');
+
+            cards.forEach(card => {
+                const cardMethod = card.getAttribute('data-method');
+                const text = card.getAttribute('data-text').toLowerCase();
+                const path = card.querySelector('.endpoint-path').innerText.toLowerCase();
+                const desc = card.querySelector('.api-description').innerText.toLowerCase();
+
+                const matchesMethod = (currentMethod === 'ALL' || cardMethod === currentMethod);
+                const matchesSearch = (!query || text.includes(query) || path.includes(query) || desc.includes(query));
+
+                if (matchesMethod && matchesSearch) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>

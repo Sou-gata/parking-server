@@ -15,18 +15,20 @@ const {
     updateAgencyMedia,
     deleteAgencyMedia,
     updateMediaStatus,
+    updateAgencyStatus,
+    getAgencyStatusHistory,
 } = require("../controllers/agency.controller");
-const { verifyJWT, authorizeRoles } = require("../middlewares/auth.middleware");
+const { verifyJWT, optionalJWT, authorizeRoles } = require("../middlewares/auth.middleware");
 const { upload } = require("../middlewares/multer.middleware");
 
 // Public & Secured Media endpoints
-router.get("/:id/media", getAgencyMedia);
+router.get("/:id/media", optionalJWT, getAgencyMedia);
 router.get("/:id/all-media", verifyJWT, getAgencyMedia);
 
 // Public endpoints
-router.get("/", listAgencies);
-router.get("/route", getRouteGeometry);
-router.get("/:id", getAgencyDetails);
+router.get("/", optionalJWT, listAgencies);
+router.get("/route", optionalJWT, getRouteGeometry);
+router.get("/:id", optionalJWT, getAgencyDetails);
 
 // Secured endpoints
 router.put(
@@ -92,6 +94,18 @@ router.patch(
     verifyJWT,
     authorizeRoles("super_admin"),
     updateMediaStatus
+);
+router.put(
+    "/:id/status",
+    verifyJWT,
+    authorizeRoles("super_admin"),
+    updateAgencyStatus
+);
+router.get(
+    "/:id/status-history",
+    verifyJWT,
+    authorizeRoles("super_admin"),
+    getAgencyStatusHistory
 );
 
 module.exports = router;

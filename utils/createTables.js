@@ -15,16 +15,13 @@ async function createTables() {
                     email VARCHAR(100) NOT NULL UNIQUE,
                     phone_number VARCHAR(20),
                     password_hash TEXT NOT NULL,
-                    user_address TEXT,
-                    landmark VARCHAR(255),
-                    latitude DECIMAL(12, 9),
-                    longitude DECIMAL(12, 9),
                     profile_photo_path VARCHAR(500),
                     role VARCHAR(50) NOT NULL DEFAULT 'user',
                     status VARCHAR(50) NOT NULL DEFAULT 'active',
                     agency_id INT NULL,
-                    vehicle_numbers VARCHAR(1000) NULL,
+                    vehicle_numbers TEXT NULL,
                     driving_licence VARCHAR(100) NULL,
+                    is_test_data TINYINT(1) NOT NULL DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 );
@@ -66,9 +63,16 @@ async function createTables() {
                     cancellation_policy TEXT NULL,
                     cctv_available TINYINT(1) DEFAULT 0,
                     trade_license TINYINT(1) DEFAULT 0,
+                    trade_license_document_path VARCHAR(500) NULL,
                     zoning_clearance TINYINT(1) DEFAULT 0,
                     shops_establishment_license TINYINT(1) DEFAULT 0,
                     gst_registration TINYINT(1) DEFAULT 0,
+                    parking_length DECIMAL(10, 2) NULL,
+                    parking_width DECIMAL(10, 2) NULL,
+                    parking_height DECIMAL(10, 2) NULL,
+                    dimension_unit VARCHAR(20) DEFAULT 'meters',
+                    reject_reason TEXT NULL,
+                    is_test_data TINYINT(1) NOT NULL DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 );
@@ -115,6 +119,9 @@ async function createTables() {
                     total_bill DECIMAL(10, 2) DEFAULT 0,
                     payment_status VARCHAR(50) NOT NULL DEFAULT 'pending',
                     otp VARCHAR(6) NULL,
+                    notified_1h TINYINT(1) NOT NULL DEFAULT 0,
+                    notified_15m TINYINT(1) NOT NULL DEFAULT 0,
+                    last_overdue_notification_at DATETIME NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 );
@@ -125,6 +132,8 @@ async function createTables() {
                     transaction_id INT AUTO_INCREMENT PRIMARY KEY,
                     user_id INT NOT NULL,
                     amount DECIMAL(10, 2) NOT NULL,
+                    previous_balance DECIMAL(10, 2) NULL,
+                    new_balance DECIMAL(10, 2) NULL,
                     type VARCHAR(50) NOT NULL,
                     status VARCHAR(50) NOT NULL DEFAULT 'pending',
                     transaction_number VARCHAR(100) NULL,
@@ -255,18 +264,60 @@ async function createTables() {
             `;
 
             const mysqlUserStatusLogsTable = `
-    CREATE TABLE IF NOT EXISTS user_status_logs (
-        log_id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        previous_status VARCHAR(50) NOT NULL,
-        new_status VARCHAR(50) NOT NULL,
-        reason TEXT NOT NULL,
-        changed_by INT NOT NULL,
-        changed_by_role VARCHAR(50) NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_user_status_logs_user_id (user_id)
-    );
-`;
+                CREATE TABLE IF NOT EXISTS user_status_logs (
+                    log_id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    previous_status VARCHAR(50) NOT NULL,
+                    new_status VARCHAR(50) NOT NULL,
+                    reason TEXT NOT NULL,
+                    changed_by INT NOT NULL,
+                    changed_by_role VARCHAR(50) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user_status_logs_user_id (user_id)
+                );
+            `;
+
+            const mysqlAgencyStatusLogsTable = `
+            CREATE TABLE IF NOT EXISTS agency_status_logs (
+                log_id INT AUTO_INCREMENT PRIMARY KEY,
+                org_id INT NOT NULL,
+                previous_status VARCHAR(50) NOT NULL,
+                new_status VARCHAR(50) NOT NULL,
+                reason TEXT NOT NULL,
+                changed_by INT NOT NULL,
+                changed_by_role VARCHAR(50) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_agency_status_logs_org_id (org_id)
+            );
+        `;
+
+            const mysqlOtpVerificationsTable = `
+                CREATE TABLE IF NOT EXISTS otp_verifications (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    phone_number VARCHAR(20) NOT NULL,
+                    otp VARCHAR(255) NOT NULL,
+                    verification_token VARCHAR(255) NULL,
+                    attempts INT DEFAULT 0,
+                    is_verified TINYINT(1) DEFAULT 0,
+                    is_consumed TINYINT(1) DEFAULT 0,
+                    expires_at DATETIME NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_otp_phone (phone_number),
+                    INDEX idx_otp_token (verification_token)
+                );
+            `;
+
+            const mysqlUserDevicesTable = `
+                CREATE TABLE IF NOT EXISTS user_devices (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    fcm_token VARCHAR(255) NOT NULL UNIQUE,
+                    device_type VARCHAR(50) NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_user_devices_user_id (user_id),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                );
+            `;
 
             await prisma.$executeRawUnsafe(mysqlUsersTable);
             await prisma.$executeRawUnsafe(mysqlOrgUsersTable);
@@ -282,6 +333,16 @@ async function createTables() {
             await prisma.$executeRawUnsafe(mysqlComplaintsTable);
             await prisma.$executeRawUnsafe(mysqlComplaintStepsTable);
             await prisma.$executeRawUnsafe(mysqlUserStatusLogsTable);
+            await prisma.$executeRawUnsafe(mysqlAgencyStatusLogsTable);
+            await prisma.$executeRawUnsafe(mysqlOtpVerificationsTable);
+            await prisma.$executeRawUnsafe(mysqlUserDevicesTable);
+
+            // Safe ALTER for otp_verifications otp column
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE otp_verifications MODIFY COLUMN otp VARCHAR(255) NOT NULL"
+                );
+            } catch (e) {}
 
             // Safe ALTER queries for existing MySQL databases
             try {
@@ -306,12 +367,17 @@ async function createTables() {
             } catch (e) {}
             try {
                 await prisma.$executeRawUnsafe(
-                    "ALTER TABLE users ADD COLUMN vehicle_numbers VARCHAR(1000) NULL"
+                    "ALTER TABLE users ADD COLUMN vehicle_numbers TEXT NULL"
                 );
             } catch (e) {}
             try {
                 await prisma.$executeRawUnsafe(
                     "ALTER TABLE users ADD COLUMN driving_licence VARCHAR(100) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users ADD COLUMN is_test_data TINYINT(1) NOT NULL DEFAULT 0"
                 );
             } catch (e) {}
             try {
@@ -337,6 +403,16 @@ async function createTables() {
             try {
                 await prisma.$executeRawUnsafe(
                     "ALTER TABLE wallet_transactions ADD COLUMN agency_id INT NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE wallet_transactions ADD COLUMN previous_balance DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE wallet_transactions ADD COLUMN new_balance DECIMAL(10, 2) NULL"
                 );
             } catch (e) {}
             try {
@@ -382,6 +458,11 @@ async function createTables() {
             try {
                 await prisma.$executeRawUnsafe(
                     "ALTER TABLE org_users ADD COLUMN trade_license TINYINT(1) DEFAULT 0"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN trade_license_document_path VARCHAR(500) NULL"
                 );
             } catch (e) {}
             try {
@@ -544,6 +625,79 @@ async function createTables() {
                     "ALTER TABLE agency_transactions ADD COLUMN approved_at DATETIME NULL"
                 );
             } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE bookings ADD COLUMN notified_1h TINYINT(1) NOT NULL DEFAULT 0"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE bookings ADD COLUMN notified_15m TINYINT(1) NOT NULL DEFAULT 0"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE bookings ADD COLUMN last_overdue_notification_at DATETIME NULL"
+                );
+            } catch (e) {}
+
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN user_address"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN landmark"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN latitude"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN longitude"
+                );
+            } catch (e) {}
+
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users MODIFY COLUMN vehicle_numbers TEXT;"
+                );
+                console.log("MySQL updated");
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN reject_reason TEXT NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN parking_length DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN parking_width DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN parking_height DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN dimension_unit VARCHAR(20) DEFAULT 'meters'"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE org_users ADD COLUMN is_test_data TINYINT(1) NOT NULL DEFAULT 0"
+                );
+            } catch (e) {}
 
             Logger.success("MySQL database schema check/creation completed.");
         } else {
@@ -558,16 +712,13 @@ async function createTables() {
                         email NVARCHAR(100) NOT NULL UNIQUE,
                         phone_number NVARCHAR(20),
                         password_hash NVARCHAR(MAX) NOT NULL,
-                        user_address NVARCHAR(MAX),
-                        landmark NVARCHAR(255),
-                        latitude DECIMAL(12, 9),
-                        longitude DECIMAL(12, 9),
                         profile_photo_path NVARCHAR(500),
                         role NVARCHAR(50) NOT NULL DEFAULT 'user',
                         status NVARCHAR(50) NOT NULL DEFAULT 'active',
                         agency_id INT NULL,
-                        vehicle_numbers NVARCHAR(1000) NULL,
+                        vehicle_numbers NVARCHAR(MAX) NULL,
                         driving_licence NVARCHAR(100) NULL,
+                        is_test_data BIT NOT NULL DEFAULT 0,
                         created_at DATETIME DEFAULT GETDATE(),
                         updated_at DATETIME DEFAULT GETDATE()
                     );
@@ -612,9 +763,16 @@ async function createTables() {
                         cancellation_policy NVARCHAR(MAX) NULL,
                         cctv_available BIT DEFAULT 0,
                         trade_license BIT DEFAULT 0,
+                        trade_license_document_path NVARCHAR(500) NULL,
                         zoning_clearance BIT DEFAULT 0,
                         shops_establishment_license BIT DEFAULT 0,
                         gst_registration BIT DEFAULT 0,
+                        parking_length DECIMAL(10, 2) NULL,
+                        parking_width DECIMAL(10, 2) NULL,
+                        parking_height DECIMAL(10, 2) NULL,
+                        dimension_unit NVARCHAR(20) DEFAULT 'meters',
+                        reject_reason NVARCHAR(MAX) NULL,
+                        is_test_data BIT NOT NULL DEFAULT 0,
                         created_at DATETIME DEFAULT GETDATE(),
                         updated_at DATETIME DEFAULT GETDATE()
                     );
@@ -667,6 +825,9 @@ async function createTables() {
                         total_bill DECIMAL(10, 2) DEFAULT 0,
                         payment_status NVARCHAR(50) NOT NULL DEFAULT 'pending',
                         otp NVARCHAR(6) NULL,
+                        notified_1h BIT NOT NULL DEFAULT 0,
+                        notified_15m BIT NOT NULL DEFAULT 0,
+                        last_overdue_notification_at DATETIME NULL,
                         created_at DATETIME DEFAULT GETDATE(),
                         updated_at DATETIME DEFAULT GETDATE()
                     );
@@ -680,6 +841,8 @@ async function createTables() {
                         transaction_id INT IDENTITY(1,1) PRIMARY KEY,
                         user_id INT NOT NULL,
                         amount DECIMAL(10, 2) NOT NULL,
+                        previous_balance DECIMAL(10, 2) NULL,
+                        new_balance DECIMAL(10, 2) NULL,
                         type NVARCHAR(50) NOT NULL,
                         status NVARCHAR(50) NOT NULL DEFAULT 'pending',
                         transaction_number NVARCHAR(100) NULL,
@@ -849,6 +1012,57 @@ async function createTables() {
                 END
             `;
 
+            const mssqlAgencyStatusLogsTable = `
+                IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[agency_status_logs]') AND type in (N'U'))
+                BEGIN
+                    CREATE TABLE agency_status_logs (
+                        log_id INT IDENTITY(1,1) PRIMARY KEY,
+                        org_id INT NOT NULL,
+                        previous_status NVARCHAR(50) NOT NULL,
+                        new_status NVARCHAR(50) NOT NULL,
+                        reason NVARCHAR(MAX) NOT NULL,
+                        changed_by INT NOT NULL,
+                        changed_by_role NVARCHAR(50) NOT NULL,
+                        created_at DATETIME DEFAULT GETDATE()
+                    );
+                    CREATE INDEX idx_agency_status_logs_org_id ON agency_status_logs(org_id);
+                END
+            `;
+
+            const mssqlOtpVerificationsTable = `
+                IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[otp_verifications]') AND type in (N'U'))
+                BEGIN
+                    CREATE TABLE otp_verifications (
+                        id INT IDENTITY(1,1) PRIMARY KEY,
+                        phone_number NVARCHAR(20) NOT NULL,
+                        otp NVARCHAR(255) NOT NULL,
+                        verification_token NVARCHAR(255) NULL,
+                        attempts INT DEFAULT 0,
+                        is_verified BIT DEFAULT 0,
+                        is_consumed BIT DEFAULT 0,
+                        expires_at DATETIME NOT NULL,
+                        created_at DATETIME DEFAULT GETDATE()
+                    );
+                    CREATE INDEX idx_otp_phone ON otp_verifications (phone_number);
+                    CREATE INDEX idx_otp_token ON otp_verifications (verification_token);
+                END
+            `;
+
+            const mssqlUserDevicesTable = `
+                IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[user_devices]') AND type in (N'U'))
+                BEGIN
+                    CREATE TABLE user_devices (
+                        id INT IDENTITY(1,1) PRIMARY KEY,
+                        user_id INT NOT NULL,
+                        fcm_token NVARCHAR(255) NOT NULL UNIQUE,
+                        device_type NVARCHAR(50) NULL,
+                        updated_at DATETIME DEFAULT GETDATE(),
+                        CONSTRAINT fk_user_devices_users FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX idx_user_devices_user_id ON user_devices(user_id);
+                END
+            `;
+
             await prisma.$executeRawUnsafe(mssqlUsersTable);
             await prisma.$executeRawUnsafe(mssqlOrgUsersTable);
             await prisma.$executeRawUnsafe(mssqlBookingsTable);
@@ -863,6 +1077,16 @@ async function createTables() {
             await prisma.$executeRawUnsafe(mssqlComplaintsTable);
             await prisma.$executeRawUnsafe(mssqlComplaintStepsTable);
             await prisma.$executeRawUnsafe(mssqlUserStatusLogsTable);
+            await prisma.$executeRawUnsafe(mssqlAgencyStatusLogsTable);
+            await prisma.$executeRawUnsafe(mssqlOtpVerificationsTable);
+            await prisma.$executeRawUnsafe(mssqlUserDevicesTable);
+
+            // Safe ALTER for MSSQL
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF EXISTS(SELECT * FROM sys.columns WHERE Name = N'otp' AND Object_ID = OBJECT_ID(N'otp_verifications')) ALTER TABLE otp_verifications ALTER COLUMN otp NVARCHAR(255) NOT NULL"
+                );
+            } catch (e) {}
 
             // Safe ALTER queries for existing MSSQL databases
             try {
@@ -897,12 +1121,17 @@ async function createTables() {
             } catch (e) {}
             try {
                 await prisma.$executeRawUnsafe(
-                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'vehicle_numbers' AND Object_ID = OBJECT_ID(N'users')) ALTER TABLE users ADD vehicle_numbers NVARCHAR(1000) NULL"
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'vehicle_numbers' AND Object_ID = OBJECT_ID(N'users')) ALTER TABLE users ADD vehicle_numbers NVARCHAR(MAX) NULL"
                 );
             } catch (e) {}
             try {
                 await prisma.$executeRawUnsafe(
                     "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'driving_licence' AND Object_ID = OBJECT_ID(N'users')) ALTER TABLE users ADD driving_licence NVARCHAR(100) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'is_test_data' AND Object_ID = OBJECT_ID(N'users')) ALTER TABLE users ADD is_test_data BIT NOT NULL DEFAULT 0"
                 );
             } catch (e) {}
             try {
@@ -927,6 +1156,16 @@ async function createTables() {
             } catch (e) {}
             try {
                 await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'previous_balance' AND Object_ID = OBJECT_ID(N'wallet_transactions')) ALTER TABLE wallet_transactions ADD previous_balance DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'new_balance' AND Object_ID = OBJECT_ID(N'wallet_transactions')) ALTER TABLE wallet_transactions ADD new_balance DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
                     "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'status' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD status NVARCHAR(50) NOT NULL DEFAULT 'pending'"
                 );
             } catch (e) {}
@@ -943,6 +1182,11 @@ async function createTables() {
             try {
                 await prisma.$executeRawUnsafe(
                     "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'trade_license' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD trade_license BIT DEFAULT 0"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'trade_license_document_path' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD trade_license_document_path NVARCHAR(500) NULL"
                 );
             } catch (e) {}
             try {
@@ -1106,6 +1350,72 @@ async function createTables() {
                 );
             } catch (e) {}
 
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN user_address"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN landmark"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN latitude"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "ALTER TABLE users DROP COLUMN longitude"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'reject_reason' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD reject_reason NVARCHAR(MAX) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'parking_length' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD parking_length DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'parking_width' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD parking_width DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'parking_height' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD parking_height DECIMAL(10, 2) NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'dimension_unit' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD dimension_unit NVARCHAR(20) DEFAULT 'meters'"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'notified_1h' AND Object_ID = OBJECT_ID(N'bookings')) ALTER TABLE bookings ADD notified_1h BIT NOT NULL DEFAULT 0"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'notified_15m' AND Object_ID = OBJECT_ID(N'bookings')) ALTER TABLE bookings ADD notified_15m BIT NOT NULL DEFAULT 0"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'last_overdue_notification_at' AND Object_ID = OBJECT_ID(N'bookings')) ALTER TABLE bookings ADD last_overdue_notification_at DATETIME NULL"
+                );
+            } catch (e) {}
+            try {
+                await prisma.$executeRawUnsafe(
+                    "IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'is_test_data' AND Object_ID = OBJECT_ID(N'org_users')) ALTER TABLE org_users ADD is_test_data BIT NOT NULL DEFAULT 0"
+                );
+            } catch (e) {}
+
             console.log("MSSQL database schema check/creation completed.");
         }
 
@@ -1143,6 +1453,28 @@ async function createTables() {
                 },
             });
             console.log("Default UPI ID config seeded successfully!");
+        }
+
+        // Seed default overtime notification configs if not exists
+        const defaultOvertimeConfigs = [
+            { key: "overtime_first_reminder_mins", val: "60" },
+            { key: "overtime_second_reminder_mins", val: "15" },
+            { key: "overdue_reminder_interval_mins", val: "15" },
+            { key: "overtime_notifications_enabled", val: "true" },
+        ];
+
+        for (const item of defaultOvertimeConfigs) {
+            const existing = await prisma.configuration.findUnique({
+                where: { config_key: item.key },
+            });
+            if (!existing) {
+                await prisma.configuration.create({
+                    data: {
+                        config_key: item.key,
+                        config_value: item.val,
+                    },
+                });
+            }
         }
     } catch (err) {
         console.error("Error creating tables or seeding:", err);

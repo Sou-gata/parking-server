@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complaint Ticketing APIs - Documentation</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <sidebar>
+        <div class="brand-header">
+            <a href="index.html" class="brand-title">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 3A2 2 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+                Parking Server API
+            </a>
+            <div class="brand-subtitle">REST API Reference Manual</div>
+        </div>
+        <div class="nav-sections">
+            <div class="nav-group-title">Overview</div>
+            <a href="index.html" class="nav-item">
+                <span>🏠 Documentation Hub</span>
+                <span class="count-badge">97</span>
+            </a>
+
+            <div class="nav-group-title">Route File Modules</div>
+            <a href="user.html" class="nav-item">
+                <span class="route-file-tag">user.routes.js</span>
+                <span class="count-badge">19</span>
+            </a>
+            <a href="agency.html" class="nav-item">
+                <span class="route-file-tag">agency.routes.js</span>
+                <span class="count-badge">17</span>
+            </a>
+            <a href="booking.html" class="nav-item">
+                <span class="route-file-tag">booking.routes.js</span>
+                <span class="count-badge">12</span>
+            </a>
+            <a href="wallet.html" class="nav-item">
+                <span class="route-file-tag">wallet.routes.js</span>
+                <span class="count-badge">20</span>
+            </a>
+            <a href="complaint.html" class="nav-item active">
+                <span class="route-file-tag">complaint.routes.js</span>
+                <span class="count-badge">8</span>
+            </a>
+            <a href="rating.html" class="nav-item">
+                <span class="route-file-tag">rating.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="notification.html" class="nav-item">
+                <span class="route-file-tag">notification.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="working-hours.html" class="nav-item">
+                <span class="route-file-tag">workingHours.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="config.html" class="nav-item">
+                <span class="route-file-tag">config.routes.js</span>
+                <span class="count-badge">2</span>
+            </a>
+            <a href="dashboard.html" class="nav-item">
+                <span class="route-file-tag">dashboard.routes.js</span>
+                <span class="count-badge">3</span>
+            </a>
+            <a href="system.html" class="nav-item">
+                <span class="route-file-tag">system.routes</span>
+                <span class="count-badge">1</span>
+            </a>
+        </div>
+    </sidebar>
+
+    <!-- Main Content Area -->
+    <main>
+        <div class="top-header">
+            <div class="search-container">
+                <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" id="searchInput" class="search-input" placeholder="Search route path, description, params, or method..." onkeyup="applyFilters()">
+            </div>
+            <div class="method-filters">
+                <button class="filter-btn active" onclick="filterMethod('ALL', this)">ALL</button>
+                <button class="filter-btn" onclick="filterMethod('GET', this)">GET</button>
+                <button class="filter-btn" onclick="filterMethod('POST', this)">POST</button>
+                <button class="filter-btn" onclick="filterMethod('PUT', this)">PUT</button>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="section-title-bar">
+                <div class="page-title">
+                    <span>🚨 Complaint Ticketing APIs</span>
+                </div>
+                <span class="file-badge-large">complaint.routes.js</span>
+            </div>
+
+            <div id="endpointsList">
+
+                <div class="endpoint-card" data-method="POST" data-text="create complaint ticket issue dispute file attachment multipart">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-POST">POST</span>
+                            <span class="endpoint-path">/api/v1/complaints</span>
+                            <div class="badges-container"><span class="badge-jwt">verifyJWT</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Creates a new complaint ticket regarding a booking dispute or facility issue.<br>
+                            Supports uploading up to 5 photo attachments as evidence.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Format (Multipart FormData)</div>
+                                <pre>{
+  "agency_id": "agency_881",
+  "booking_id": "bk_99012",
+  "subject": "Unauthorized extra charge at exit gate",
+  "description": "Operator requested cash payment despite wallet deduction.",
+  "attachments": ["&lt;File 1&gt;", "&lt;File 2&gt;"]
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (201 Created)</div>
+                                <pre>{
+  "statusCode": 201,
+  "data": { "complaint_id": "cmp_301", "ticket_number": "TICK-90812", "status": "open" },
+  "message": "Complaint filed successfully"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="user booking complaint status ids active disputes customer">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/complaints/user-status</span>
+                            <div class="badges-container"><span class="badge-jwt">verifyJWT</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/user-status')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Retrieves list of booking IDs that the authenticated user has filed complaints for, enabling UI dispute indicators.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔑 Headers Required</div>
+                                <pre>Authorization: Bearer &lt;JWT_TOKEN&gt;</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": ["bk_99012", "bk_99045"],
+  "message": "User complaint status retrieved"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="my user complaints customer ticket list timeline">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/complaints/user</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">user | super_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/user')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches complaints list with step timelines submitted by the authenticated user.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔑 Headers Required</div>
+                                <pre>Authorization: Bearer &lt;JWT_TOKEN&gt;</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": [
+    { "complaint_id": "cmp_301", "subject": "Unauthorized extra charge", "status": "in_progress", "created_at": "2026-08-12T14:00:00Z" }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="agency complaints queue tickets agency admin staff authority admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/complaints/agency</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | staff | authority_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/agency')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches complaints filed against agency facilities for operator and authority review.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔍 Query Parameters</div>
+                                <pre>status=open&page=1&limit=10</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": [
+    { "complaint_id": "cmp_301", "ticket_number": "TICK-90812", "customer_name": "John Doe", "subject": "Unauthorized extra charge", "status": "open" }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="admin complaints queue tickets super admin authority admin">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/complaints/admin</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">super_admin | authority_admin</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/admin')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Master system complaint inbox for Super Admins and Authority Admins.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">🔍 Query Parameters</div>
+                                <pre>agency_id=agency_881&status=in_progress&page=1</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": {
+    "complaints": [ { "complaint_id": "cmp_301", "agency_name": "Metro Parking Hub", "status": "in_progress" } ],
+    "total": 1
+  }
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="GET" data-text="get complaint single ticket details attachments steps timeline">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-GET">GET</span>
+                            <span class="endpoint-path">/api/v1/complaints/:complaintId</span>
+                            <div class="badges-container"><span class="badge-jwt">verifyJWT</span></div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/{complaintId}')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Fetches single ticket details including timeline steps, internal notes, and attachments.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📌 Path Parameters</div>
+                                <pre>complaintId: string (e.g. cmp_301)</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": {
+    "complaint_id": "cmp_301",
+    "subject": "Unauthorized extra charge",
+    "description": "Operator requested cash...",
+    "status": "in_progress",
+    "attachments": ["uploads/att_1.png"],
+    "timeline": [ { "step": "Created", "timestamp": "2026-08-12T14:00:00Z" } ]
+  }
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="POST" data-text="add step timeline note complaint history update">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-POST">POST</span>
+                            <span class="endpoint-path">/api/v1/complaints/:complaintId/steps</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">user | agency_admin | super_admin | staff</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/{complaintId}/steps')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Appends an update note or resolution progress step to ticket timeline.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "action_taken": "Contacted gate operator for shift log review",
+  "note": "Operator confirmed receipt mistake."
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (201 Created)</div>
+                                <pre>{
+  "statusCode": 201,
+  "data": { "step_id": "step_881", "action_taken": "Contacted gate operator..." },
+  "message": "Timeline step added"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint-card" data-method="PUT" data-text="update complaint status in_progress resolved closed admin staff">
+                    <div class="endpoint-header">
+                        <div class="endpoint-header-left">
+                            <span class="method-badge method-PUT">PUT</span>
+                            <span class="endpoint-path">/api/v1/complaints/:complaintId/status</span>
+                            <div class="badges-container">
+                                <span class="badge-jwt">verifyJWT</span>
+                                <span class="badge-role">agency_admin | super_admin | staff</span>
+                            </div>
+                        </div>
+                        <button class="copy-btn" onclick="copyPath('/api/v1/complaints/{complaintId}/status')">Copy Path</button>
+                    </div>
+                    <div class="endpoint-details">
+                        <div class="api-description">
+                            Updates ticket progress status (open, in_progress, resolved, rejected, closed) and resolution notes.
+                        </div>
+                        <div class="grid-details">
+                            <div>
+                                <div class="block-title">📥 Request Body (JSON)</div>
+                                <pre>{
+  "status": "resolved",
+  "resolution_notes": "Cash amount refunded to customer wallet."
+}</pre>
+                            </div>
+                            <div>
+                                <div class="block-title">📤 Sample Response (200 OK)</div>
+                                <pre>{
+  "statusCode": 200,
+  "data": { "complaint_id": "cmp_301", "status": "resolved" },
+  "message": "Complaint status updated"
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Notification Element -->
+    <div id="toast" class="toast">Path copied to clipboard!</div>
+
+    <script>
+        let currentMethod = 'ALL';
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            setTimeout(() => { toast.classList.remove('show'); }, 2000);
+        }
+
+        function copyPath(path) {
+            navigator.clipboard.writeText(path).then(() => {
+                showToast('Copied: ' + path);
+            }).catch(() => {
+                prompt('Copy endpoint path:', path);
+            });
+        }
+
+        function filterMethod(method, btn) {
+            currentMethod = method;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.endpoint-card');
+
+            cards.forEach(card => {
+                const cardMethod = card.getAttribute('data-method');
+                const text = card.getAttribute('data-text').toLowerCase();
+                const path = card.querySelector('.endpoint-path').innerText.toLowerCase();
+                const desc = card.querySelector('.api-description').innerText.toLowerCase();
+
+                const matchesMethod = (currentMethod === 'ALL' || cardMethod === currentMethod);
+                const matchesSearch = (!query || text.includes(query) || path.includes(query) || desc.includes(query));
+
+                if (matchesMethod && matchesSearch) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>

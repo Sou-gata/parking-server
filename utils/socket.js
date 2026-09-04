@@ -61,9 +61,23 @@ function getIO() {
 }
 
 function sendNotificationToUser(userId, notification) {
+    if (!userId) return;
+
     if (!io) {
-        throw new Error("[Socket] Error: Socket.io has not been initialized.");
+        if (typeof process.send === "function") {
+            process.send({
+                type: "SOCKET_NOTIFY_USER",
+                userId,
+                notification,
+            });
+            return;
+        }
+        console.warn(
+            `[Socket] Socket.io not initialized. Skipping socket emit to user ${userId}.`
+        );
+        return;
     }
+
     const payload =
         typeof notification === "string"
             ? { message: notification }
@@ -72,13 +86,23 @@ function sendNotificationToUser(userId, notification) {
         ...payload,
         timestamp: new Date(),
     });
-    console.log(`[Socket] Sent notification to user_${userId}:`, payload);
 }
 
 function sendNotificationToAll(notification) {
     if (!io) {
-        throw new Error("[Socket] Error: Socket.io has not been initialized.");
+        if (typeof process.send === "function") {
+            process.send({
+                type: "SOCKET_NOTIFY_ALL",
+                notification,
+            });
+            return;
+        }
+        console.warn(
+            "[Socket] Socket.io not initialized. Skipping broadcast notification."
+        );
+        return;
     }
+
     const payload =
         typeof notification === "string"
             ? { message: notification }
@@ -93,6 +117,8 @@ function sendNotificationToAll(notification) {
 module.exports = {
     init,
     getIO,
+    isSocketInitialized: () => !!io,
     sendNotificationToUser,
     sendNotificationToAll,
 };
+

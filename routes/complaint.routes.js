@@ -9,6 +9,7 @@ const {
     getComplaintById,
     addComplaintStep,
     updateComplaintStatus,
+    createComplaintSuper,
 } = require("../controllers/complaint.controller");
 const { verifyJWT, authorizeRoles } = require("../middlewares/auth.middleware");
 
@@ -20,12 +21,15 @@ router.post(
     createComplaint
 );
 
-// Get user's complained booking IDs
-router.get(
-    "/user-status",
+router.post(
+    "/super",
     verifyJWT,
-    getUserBookingComplaintStatus
+    authorizeRoles("super_admin", "authority_admin"),
+    createComplaintSuper
 );
+
+// Get user's complained booking IDs
+router.get("/user-status", verifyJWT, getUserBookingComplaintStatus);
 
 // Get user's complaints list with step timeline
 router.get(
@@ -39,7 +43,13 @@ router.get(
 router.get(
     "/agency",
     verifyJWT,
-    authorizeRoles("agency_admin", "agency_user", "org", "super_admin"),
+    authorizeRoles(
+        "agency_admin",
+        "agency_user",
+        "org",
+        "super_admin",
+        "authority_admin"
+    ),
     getAgencyComplaints
 );
 
@@ -47,7 +57,7 @@ router.get(
 router.get(
     "/admin",
     verifyJWT,
-    authorizeRoles("super_admin"),
+    authorizeRoles("super_admin", "authority_admin"),
     getAllComplaints
 );
 

@@ -14,17 +14,14 @@ model User {
   email              String   @unique @db.VarChar(100)
   phone_number       String?  @db.VarChar(20)
   password_hash      String   @db.Text
-  user_address       String?  @db.Text
-  landmark           String?  @db.VarChar(255)
-  latitude           Decimal? @db.Decimal(12, 9)
-  longitude          Decimal? @db.Decimal(12, 9)
   profile_photo_path String?  @db.VarChar(500)
   role               String   @default("user") @db.VarChar(50)
   status             String   @default("active") @db.VarChar(50)
   agency_id          Int?
   wallet_balance     Decimal  @default(0.00) @db.Decimal(10, 2)
-  vehicle_numbers    String?  @db.VarChar(1000)
+  vehicle_numbers    String?  @db.Text
   driving_licence    String?  @db.VarChar(100)
+  is_test_data       Boolean  @default(false)
   created_at         DateTime @default(now())
   updated_at         DateTime @default(now()) @updatedAt
 
@@ -69,9 +66,16 @@ model OrgUser {
   require_booking_approval   Boolean  @default(false)
   cctv_available             Boolean  @default(false)
   trade_license              Boolean  @default(false)
+  trade_license_document_path String? @db.VarChar(500)
   zoning_clearance           Boolean  @default(false)
   shops_establishment_license Boolean @default(false)
   gst_registration           Boolean  @default(false)
+  parking_length             Decimal? @db.Decimal(10, 2)
+  parking_width              Decimal? @db.Decimal(10, 2)
+  parking_height             Decimal? @db.Decimal(10, 2)
+  dimension_unit             String?  @default("meters") @db.VarChar(20)
+  reject_reason              String?  @db.Text
+  is_test_data               Boolean  @default(false)
 
   @@map("org_users")
 }
@@ -128,6 +132,9 @@ model Booking {
   rejected_by         Int?
   rejected_at         DateTime?
   rejection_reason    String?   @db.Text
+  notified_1h         Boolean   @default(false)
+  notified_15m        Boolean   @default(false)
+  last_overdue_notification_at DateTime?
   created_at          DateTime  @default(now())
   updated_at          DateTime  @default(now()) @updatedAt
 
@@ -139,6 +146,8 @@ model WalletTransaction {
   user_id            Int
   agency_id          Int?
   amount             Decimal  @db.Decimal(10, 2)
+  previous_balance   Decimal? @db.Decimal(10, 2)
+  new_balance        Decimal? @db.Decimal(10, 2)
   type               String   @db.VarChar(50) // "deposit" or "withdrawal"
   status             String   @default("pending") @db.VarChar(50) // "pending", "approved", "rejected"
   transaction_number String?  @db.VarChar(100)
@@ -235,9 +244,9 @@ model OrgWorkingHours {
 
 model Complaint {
   complaint_id     Int       @id @default(autoincrement())
-  booking_id       Int
-  user_id          Int
-  agency_id        Int
+  booking_id       Int?
+  user_id          Int?
+  agency_id        Int?
   complainant_type String    @default("user_to_agency") @db.VarChar(50)
   complainant_id   Int
   subject          String?   @db.VarChar(255)
@@ -250,7 +259,6 @@ model Complaint {
   updated_at       DateTime        @default(now()) @updatedAt
   steps            ComplaintStep[]
 
-  @@unique([booking_id, complainant_type], name: "booking_complainant_type")
   @@map("complaints")
 }
 
@@ -282,4 +290,45 @@ model UserStatusLog {
 
   @@index([user_id])
   @@map("user_status_logs")
+}
+
+model AgencyStatusLog {
+  log_id          Int      @id @default(autoincrement())
+  org_id          Int
+  previous_status String   @db.VarChar(50)
+  new_status      String   @db.VarChar(50)
+  reason          String   @db.Text
+  changed_by      Int
+  changed_by_role String   @db.VarChar(50)
+  created_at      DateTime @default(now())
+
+  @@index([org_id])
+  @@map("agency_status_logs")
+}
+
+model OtpVerification {
+  id                 Int      @id @default(autoincrement())
+  phone_number       String   @db.VarChar(20)
+  otp                String   @db.VarChar(255)
+  verification_token String?  @db.VarChar(255)
+  attempts           Int      @default(0)
+  is_verified        Boolean  @default(false)
+  is_consumed        Boolean  @default(false)
+  expires_at         DateTime
+  created_at         DateTime @default(now())
+
+  @@index([phone_number])
+  @@index([verification_token])
+  @@map("otp_verifications")
+}
+
+model UserDevice {
+  id          Int      @id @default(autoincrement())
+  user_id     Int
+  fcm_token   String   @unique @db.VarChar(255)
+  device_type String?  @db.VarChar(50)
+  updated_at  DateTime @default(now()) @updatedAt
+
+  @@index([user_id])
+  @@map("user_devices")
 }

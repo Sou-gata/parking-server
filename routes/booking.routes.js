@@ -5,6 +5,7 @@ const {
     getUserBookings,
     getAgencyBookings,
     getBookingDetailsByCode,
+    getSlotAvailability,
     checkIn,
     checkOut,
     cancelBooking,
@@ -13,7 +14,14 @@ const {
     processBookingRefund,
     updateBookingApprovalStatus,
 } = require("../controllers/booking.controller");
-const { verifyJWT, authorizeRoles } = require("../middlewares/auth.middleware");
+const {
+    verifyJWT,
+    optionalJWT,
+    authorizeRoles,
+} = require("../middlewares/auth.middleware");
+
+// Slot Availability endpoint (public / optional JWT)
+router.get("/availability", optionalJWT, getSlotAvailability);
 
 // Secured endpoints for users/staff
 router.post("/", verifyJWT, createBooking);

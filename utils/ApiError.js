@@ -28,6 +28,16 @@ class ApiError extends Error {
             errors: this.errors,
         });
     }
+
+    toJSON() {
+        return {
+            success: this.success,
+            statusCode: this.statusCode,
+            message: this.message,
+            data: this.data,
+            errors: this.errors,
+        };
+    }
 }
 
 module.exports = { ApiError };

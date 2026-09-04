@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parking Server REST API Documentation Hub</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <sidebar>
+        <div class="brand-header">
+            <a href="index.html" class="brand-title">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 3A2 2 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+                Parking Server API
+            </a>
+            <div class="brand-subtitle">REST API Reference Manual</div>
+        </div>
+        <div class="nav-sections">
+            <div class="nav-group-title">Overview</div>
+            <a href="index.html" class="nav-item active">
+                <span>🏠 Documentation Hub</span>
+                <span class="count-badge">97</span>
+            </a>
+
+            <div class="nav-group-title">Route File Modules</div>
+            <a href="user.html" class="nav-item">
+                <span class="route-file-tag">user.routes.js</span>
+                <span class="count-badge">19</span>
+            </a>
+            <a href="agency.html" class="nav-item">
+                <span class="route-file-tag">agency.routes.js</span>
+                <span class="count-badge">17</span>
+            </a>
+            <a href="booking.html" class="nav-item">
+                <span class="route-file-tag">booking.routes.js</span>
+                <span class="count-badge">12</span>
+            </a>
+            <a href="wallet.html" class="nav-item">
+                <span class="route-file-tag">wallet.routes.js</span>
+                <span class="count-badge">20</span>
+            </a>
+            <a href="complaint.html" class="nav-item">
+                <span class="route-file-tag">complaint.routes.js</span>
+                <span class="count-badge">8</span>
+            </a>
+            <a href="rating.html" class="nav-item">
+                <span class="route-file-tag">rating.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="notification.html" class="nav-item">
+                <span class="route-file-tag">notification.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="working-hours.html" class="nav-item">
+                <span class="route-file-tag">workingHours.routes.js</span>
+                <span class="count-badge">5</span>
+            </a>
+            <a href="config.html" class="nav-item">
+                <span class="route-file-tag">config.routes.js</span>
+                <span class="count-badge">2</span>
+            </a>
+            <a href="dashboard.html" class="nav-item">
+                <span class="route-file-tag">dashboard.routes.js</span>
+                <span class="count-badge">3</span>
+            </a>
+            <a href="system.html" class="nav-item">
+                <span class="route-file-tag">system.routes</span>
+                <span class="count-badge">1</span>
+            </a>
+        </div>
+    </sidebar>
+
+    <!-- Main Content Area -->
+    <main>
+        <div class="top-header">
+            <div class="search-container">
+                <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" id="searchInput" class="search-input" placeholder="Search module name or description..." onkeyup="filterModules()">
+            </div>
+            <div style="font-size: 0.82rem; color: var(--text-muted);">
+                Base URL: <code style="font-family: 'Fira Code'; color: #6366f1; background: rgba(99,102,241,0.1); padding: 4px 8px; border-radius: 6px;">http://localhost:4444/api/v1</code>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <!-- Stats Summary Banner -->
+            <div class="stats-banner">
+                <div class="stat-card">
+                    <div class="val">97</div>
+                    <div class="lbl">Total Endpoints</div>
+                </div>
+                <div class="stat-card">
+                    <div class="val" style="color: var(--get-color);">44</div>
+                    <div class="lbl">GET Requests</div>
+                </div>
+                <div class="stat-card">
+                    <div class="val" style="color: var(--post-color);">34</div>
+                    <div class="lbl">POST Requests</div>
+                </div>
+                <div class="stat-card">
+                    <div class="val" style="color: var(--put-color);">15</div>
+                    <div class="lbl">PUT & PATCH Requests</div>
+                </div>
+                <div class="stat-card">
+                    <div class="val" style="color: var(--delete-color);">4</div>
+                    <div class="lbl">DELETE Requests</div>
+                </div>
+            </div>
+
+            <div class="section-title-bar">
+                <div class="page-title">
+                    <span>📚 Route Module Documentation</span>
+                </div>
+                <div style="color: var(--text-muted); font-size: 0.85rem;">Select a route file below to view full specifications</div>
+            </div>
+
+            <!-- Module Grid Cards -->
+            <div class="module-grid" id="moduleGrid">
+
+                <a href="user.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">👤 User & Authentication</div>
+                            <span class="module-card-file">user.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Registration, Login, JWT Authentication, Customer Profiles, Super Admin Request Approvals, Staff Operations, and Directory Management.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>19 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="agency.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">🏢 Agency Management</div>
+                            <span class="module-card-file">agency.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Parking Facility Lot Search, Radius Filtering, Driving Polyline Route Calculation, Pricing Rates, Slot Capacities, Policy & Media Galleries.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>17 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="booking.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">🎟️ Booking Operations</div>
+                            <span class="module-card-file">booking.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Spot Reservations, Booking Code & QR Verification, Gate Operator Check-in/Check-out, Cancellation Previews, and Financial Refunds.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>12 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="wallet.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">💳 Wallets & Finance</div>
+                            <span class="module-card-file">wallet.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Customer Wallet Top-up Requests, UPI QR Codes, Agency Revenue Cash Withdrawals, Admin Settlements, and Platform Config.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>20 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="complaint.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">🚨 Complaint Ticketing</div>
+                            <span class="module-card-file">complaint.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Booking Disputes, Ticket Resolution Queues, Step History Timelines, Resolution Notes, and Complaint Audits.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>8 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="rating.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">⭐ Ratings & Reviews</div>
+                            <span class="module-card-file">rating.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Customer Ratings, Written Reviews, Agency Average Scores, Booking Review Submissions, and Rating Deletions.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>5 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="notification.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">🔔 Notifications</div>
+                            <span class="module-card-file">notification.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            User Notification Feeds, Mark-Read Actions, Clearing Inbox, and Notification Channel Preferences (Email, Push, SMS).
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>5 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="working-hours.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">🕒 Working Hours</div>
+                            <span class="module-card-file">workingHours.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Facility Operating Schedules, 24/7 Hours Configuration, Pending Admin Approval Queue, and Schedule Updates.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>5 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="config.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">⚙️ Platform Config</div>
+                            <span class="module-card-file">config.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Terms & Conditions, Privacy Policy Markdown Retrieval for Customer and Agency Portals, and Super Admin Content Updates.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>2 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="dashboard.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">📊 Dashboard Analytics</div>
+                            <span class="module-card-file">dashboard.routes.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Super Admin Operator Operational Overview, Authority Admin Financial Ownership & Space Occupancy Metrics, and Role-Based User/Agency Dashboard Stats.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>3 Endpoints</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+                <a href="system.html" class="module-card">
+                    <div>
+                        <div class="module-card-header">
+                            <div class="module-card-title">⚡ System Health</div>
+                            <span class="module-card-file">index.js</span>
+                        </div>
+                        <div class="module-card-desc">
+                            Public Health Check and Server Ping Status Verification Endpoint.
+                        </div>
+                    </div>
+                    <div class="module-card-footer">
+                        <span>1 Endpoint</span>
+                        <span>View Documentation &rarr;</span>
+                    </div>
+                </a>
+
+            </div>
+        </div>
+    </main>
+
+    <script>
+        function filterModules() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.module-card');
+
+            cards.forEach(card => {
+                const text = card.innerText.toLowerCase();
+                if (!query || text.includes(query)) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>

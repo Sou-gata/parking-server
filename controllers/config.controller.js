@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { prisma } = require("../utils/db");
 const { ApiError } = require("../utils/ApiError");
 const { ApiResponse } = require("../utils/ApiResponse");
@@ -105,7 +107,197 @@ const updateTerms = async (req, res) => {
     }
 };
 
+/**
+ * Check for application update - Public Endpoint
+ */
+const checkAppUpdate = async (req, res) => {
+    try {
+        const apkDir = path.join(__dirname, "../apk");
+        const versionJsonPath = path.join(apkDir, "version.json");
+        const apkFilePath = path.join(apkDir, "app-release.apk");
+
+        const apkExists = fs.existsSync(apkFilePath);
+
+        let updateData = {
+            versionName: "1.0.0",
+            versionCode: 1,
+            releaseNotes: "Performance enhancements and stability updates.",
+            downloadUrl: "/apk/app-release.apk",
+            forceUpdate: false,
+            apkExists,
+        };
+
+        if (fs.existsSync(versionJsonPath)) {
+            try {
+                const fileContent = fs.readFileSync(versionJsonPath, "utf8");
+                const json = JSON.parse(fileContent);
+                updateData = {
+                    ...updateData,
+                    ...json,
+                    apkExists,
+                };
+            } catch (err) {
+                console.error("Error parsing apk/version.json:", err);
+            }
+        }
+
+        return new ApiResponse(
+            200,
+            updateData,
+            "App version checked successfully"
+        ).send(res);
+    } catch (error) {
+        console.error("Error in checkAppUpdate:", error);
+        if (error instanceof ApiError)
+            return new ApiError(error.statusCode, error.message).send(res);
+        return new ApiError(500, error.message).send(res);
+    }
+};
+
+/**
+ * Get Overtime Notification Settings - Super Admin & Admin
+ */
+const getOvertimeSettings = async (req, res) => {
+    try {
+        const configs = await prisma.configuration.findMany({
+            where: {
+                config_key: {
+                    in: [
+                        "overtime_first_reminder_mins",
+                        "overtime_second_reminder_mins",
+                        "overdue_reminder_interval_mins",
+                        "overtime_notifications_enabled",
+                    ],
+                },
+            },
+        });
+
+        const configMap = {};
+        configs.forEach((c) => {
+            configMap[c.config_key] = c.config_value;
+        });
+
+        const data = {
+            first_reminder_mins: parseInt(
+                configMap["overtime_first_reminder_mins"] || "60",
+                10
+            ),
+            second_reminder_mins: parseInt(
+                configMap["overtime_second_reminder_mins"] || "15",
+                10
+            ),
+            overdue_reminder_interval_mins: parseInt(
+                configMap["overdue_reminder_interval_mins"] || "15",
+                10
+            ),
+            enabled: configMap["overtime_notifications_enabled"] !== "false",
+        };
+
+        return new ApiResponse(
+            200,
+            data,
+            "Overtime notification settings fetched successfully"
+        ).send(res);
+    } catch (error) {
+        console.error("Error in getOvertimeSettings:", error);
+        if (error instanceof ApiError)
+            return new ApiError(error.statusCode, error.message).send(res);
+        return new ApiError(500, error.message).send(res);
+    }
+};
+
+/**
+ * Update Overtime Notification Settings - Super Admin Only
+ */
+const updateOvertimeSettings = async (req, res) => {
+    try {
+        if (req.user?.role !== "super_admin") {
+            throw new ApiError(
+                403,
+                "Access denied: Super Admin permission required"
+            );
+        }
+
+        const {
+            first_reminder_mins,
+            second_reminder_mins,
+            overdue_reminder_interval_mins,
+            enabled,
+        } = req.body;
+
+        const parsedFirst = parseInt(first_reminder_mins, 10);
+        const parsedSecond = parseInt(second_reminder_mins, 10);
+        const parsedInterval = parseInt(overdue_reminder_interval_mins, 10);
+
+        if (isNaN(parsedFirst) || parsedFirst <= 0) {
+            throw new ApiError(
+                400,
+                "first_reminder_mins must be a positive integer"
+            );
+        }
+        if (isNaN(parsedSecond) || parsedSecond <= 0) {
+            throw new ApiError(
+                400,
+                "second_reminder_mins must be a positive integer"
+            );
+        }
+        if (isNaN(parsedInterval) || parsedInterval <= 0) {
+            throw new ApiError(
+                400,
+                "overdue_reminder_interval_mins must be a positive integer"
+            );
+        }
+        if (parsedFirst <= parsedSecond) {
+            throw new ApiError(
+                400,
+                "first_reminder_mins must be greater than second_reminder_mins"
+            );
+        }
+
+        const enabledVal =
+            enabled !== undefined ? String(Boolean(enabled)) : "true";
+
+        const updates = [
+            { key: "overtime_first_reminder_mins", val: String(parsedFirst) },
+            { key: "overtime_second_reminder_mins", val: String(parsedSecond) },
+            {
+                key: "overdue_reminder_interval_mins",
+                val: String(parsedInterval),
+            },
+            { key: "overtime_notifications_enabled", val: enabledVal },
+        ];
+
+        for (const item of updates) {
+            await prisma.configuration.upsert({
+                where: { config_key: item.key },
+                update: { config_value: item.val },
+                create: { config_key: item.key, config_value: item.val },
+            });
+        }
+
+        return new ApiResponse(
+            200,
+            {
+                first_reminder_mins: parsedFirst,
+                second_reminder_mins: parsedSecond,
+                overdue_reminder_interval_mins: parsedInterval,
+                enabled: enabledVal === "true",
+            },
+            "Overtime notification settings updated successfully"
+        ).send(res);
+    } catch (error) {
+        console.error("Error in updateOvertimeSettings:", error);
+        if (error instanceof ApiError)
+            return new ApiError(error.statusCode, error.message).send(res);
+        return new ApiError(500, error.message).send(res);
+    }
+};
+
 module.exports = {
     getTerms,
     updateTerms,
+    checkAppUpdate,
+    getOvertimeSettings,
+    updateOvertimeSettings,
 };
+
